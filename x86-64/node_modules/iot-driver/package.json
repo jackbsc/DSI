@@ -1,0 +1,24 @@
+{
+  "name": "iot-docker",
+  "version": "0.1.0",
+  "description": "Driver for common IoT sensors",
+  "main": "driver.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "dependencies": {
+    "spi-device": "0.x",
+    "i2c-bus": "1.x",
+    "onoff": "1.x",
+    "sleep": "5.x",
+    "serialport": "5.x"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "driver"
+  ],
+  "author": "",
+  "license": "UNLICENSED"
+}
