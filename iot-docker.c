@@ -515,7 +515,7 @@ int main(int argc, char* argv[]){
 	}
 
 	// Print argv for debugging
-	printCmd(argvList);
+	//printCmd(argvList);
 
 	// Create child process for running docker
 	pid_t pid = vfork();
