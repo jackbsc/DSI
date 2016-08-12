@@ -60,11 +60,11 @@ typedef union{
 #define LIST_SRC_FILE  (1 << 5)
 
 #if defined(__aarch64__) || defined(__arm__)
-#define DOCKER_IMAGE "jackbsc/iot:io"
+#define DOCKER_IMAGE "jackbsc/iot:io_arm"
 #endif
 
 #if defined(__i386__) || defined(__x86_64__)
-#define DOCKER_IMAGE "jackbsc/iot:x86"
+#define DOCKER_IMAGE "jackbsc/iot:io_x64"
 #endif
 
 #define CONTAINER_NAME "iot"
