@@ -7,79 +7,112 @@ var driver = new Object(rpio.init({gpiomem: false}));
 /*Microchip MCP3204 ADC driver*/
 driver.MCP3204 = function(pin){
 
-	var _cs = pin.cs;
+	var cs = pin.cs;
+	var Vref = 3.3; //defualt to 3.3V Vref
+	var clk = 1000000; //default to 1MHz clk
+	var dataMode = 0; //default to mode 0
+	var sampleMode;
+	var d0, d1;
+	var pos, neg;
 
 	//initialize the pin to output
-	rpio.open(_cs, rpio.OUTPUT, rpio.HIGH);
+	rpio.open(cs, rpio.OUTPUT, rpio.HIGH);
 
 	this.settings = function(settings){
 
-		//TODO: add in check for clk speed;	
-		this.mode = settings.mode;
-
+		//TODO: add in change Vref
 		rpio.spiBegin();
+
+		if(settings.clk == undefined){
+			//if no clk specify, use the old or default clock setting
+			settings.clk = clk;
+		}
+		else if(isNaN(settings.clk) || settings.clk < 0 || settings.clk > 250000000){
+			throw "MCP3204: Incorrect Clock Settings";
+		}
+		else{
+			//correct clock setting, remember it
+			clk = settings.clk;
+		}
 		rpio.spiSetClockDivider(250000000 / settings.clk);
-		rpio.spiSetDataMode(0);
 
-		if(this.mode == "single"){
-			this.ch = settings.ch;
+		if(settings.dataMode == undefined){
+			//if no data mode specify, use the old or defualt data mode setting
+			settings.dataMode = dataMode;
+		}
+		else if(isNaN(settings.dataMode) || settings.dataMode < 0 || settings.dataMode > 3){
+			throw "MCP3204: Incorrect Mode Settings";
+		}
+		else{
+			//correct data mode setting, remember it
+			dataMode = settings.dataMode;
+		}
+		rpio.spiSetDataMode(settings.dataMode);
 
-			if(!(this.ch >=0 || this.ch <=3)){
+		sampleMode = settings.sampleMode;
+		if(sampleMode == "single"){
+			ch = settings.ch;
+
+			if(!(ch >=0 || ch <=3)){
 				throw "MCP3204: Error Channel Configuration (0-3)";
 			}
-			this.mode = 1;
-			this.d0 = this.ch & 0x01;
-			this.d1 = this.ch >> 1;
+			sampleMode = 1;
+			d0 = ch & 0x01;
+			d1 = ch >> 1;
 		}
-		else if(this.mode == "differential"){
-			this.pos = settings.pos;
-			this.neg = settings.neg;
+		else if(sampleMode == "differential"){
+			pos = settings.pos;
+			neg = settings.neg;
 
-			if (this.pos - 1 < 0 && this.pos + 1 > 3){
+			if (pos - 1 < 0 && pos + 1 > 3){
 				throw "MCP3204: Channels Invalid";
 			}
-			else if (this.pos % 2 == 0){
-				if(this.neg != (this.pos + 1)){
+			else if (pos % 2 == 0){
+				if(neg != (pos + 1)){
 					throw "MCP3204: Channels Invalid";
 				}
-				this.d1 = (this.pos == 0) ? (0) : (1);
-				this.d0 = 0;
+				d1 = (pos == 0) ? (0) : (1);
+				d0 = 0;
 			}
-			else if(this.pos % 2 != 0){
-				if(this.neg != (this.pos - 1)){
+			else if(pos % 2 != 0){
+				if(neg != (pos - 1)){
 					throw "MCP3204: Channels Invalid";
 				}
-				this.d1 = (this.pos == 1) ? (0) : (1);
-				this.d0 = 1;	
+				d1 = (pos == 1) ? (0) : (1);
+				d0 = 1;	
 			}
-			this.mode = 0;	
+			sampleMode = 0;	
 		}
 		else{
 			throw "MCP3204: Unrecognized Channel Configuration";
 		}	
 	}
 
-	this.read = function(){
-		var cmd = 0x04 | (this.mode << 1);
+	this.readRaw = function(){
+		var cmd = 0x04 | (sampleMode << 1);
 		var txbuf = new Buffer([cmd]);
 		var rxbuf = new Buffer(txbuf.length);
 
 		//pull the CS pin low
-		rpio.write(_cs, rpio.LOW);	
+		rpio.write(cs, rpio.LOW);	
 
 		//send start command
 		rpio.spiWrite(txbuf, txbuf.length);
 		//send rest of the command
-		cmd = (this.d1 << 7) | (this.d0 << 6);
+		cmd = (d1 << 7) | (d0 << 6);
 		txbuf = new Buffer([cmd, 0xff]);
 		rxbuf = new Buffer(txbuf.length);
 		rpio.spiTransfer(txbuf, rxbuf, txbuf.length);
 
 		//pull the CS pin high to end the transaction
-		rpio.write(_cs, rpio.HIGH);
+		rpio.write(cs, rpio.HIGH);
 
 		//return the read result
 		return ((rxbuf[0] & 0x0F) << 8) | rxbuf[1];
+	}
+
+	this.readVolts = function(){
+		return this.readRaw() * Vref / 4096;
 	}
 }
 
@@ -170,30 +203,40 @@ driver.L293 = function(config){
 driver.TC74 = function(){
 	//TODO: check the clk speed limit of the i2c bus
 
+	var mode = "normal";
+	var tempReg = 0;
+	var configReg = 1;
+
 	rpio.i2cBegin();
 	this.settings = function(settings){
-		if(isNaN(addr) || addr < 0 || addr > 127){
+		if(isNaN(settings.addr) || settings.addr < 0 || settings.addr > 127){
 			throw "TC74: Error Slave Address";
 		}
 		rpio.i2cSetSlaveAddress(settings.addr);
-		//TODO: check the clk rate
-		if(isNaN(settings.clk) || settings.clk > 400000 || settings.clk < 0){
-			throw "TC74: Error I2C Clock Rate (~400KHz)";
+		if(isNaN(settings.clk) || settings.clk > 100000 || settings.clk < 0){
+			throw "TC74: Error I2C Clock Rate (~100kHz)";
 		}
 		rpio.i2cSetBaudRate(settings.clk);
 	}
 
-	//these are not public functions
-	function read(){
-	
-	}
-
-	function write(){
-	
-	}
-
 	this.getTemp = function(){
-		
+		var rxbuf = new Buffer(1);
+		do{		
+			rpio.i2cWrite(Buffer([configReg]));
+			rpio.i2cRead(rxbuf, 1);
+		}while(!(rxbuf[0] & 0x40));
+		rpio.i2cWrite(Buffer([tempReg]));
+		rpio.i2cRead(rxbuf, 1);
+		return rxbuf[0];		
+	}
+
+	this.standBy = function(){	
+		//TODO: check why standby mode cannot work
+		if(mode == "normal"){
+			mode = "standby";
+			rpio.i2cWrite(Buffer([configReg]));
+			rpio.i2cWrite(Buffer([0x80]));
+		}
 	}
 
 }
