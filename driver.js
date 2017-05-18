@@ -77,27 +77,29 @@ driver.MCP3204 = function(settings){
 	var sampleMode;
 	var d0, d1;
 	var pos, neg;
-	
+
 	var bus = settings.bus, device = settings.device;
+
+	//TODO: add in change Vref
+	if(cpuinfo == "BCM2709"){
+		console.log(settings.cs, piPin[settings.cs]);
+		if(piPin[settings.cs] == undefined){
+			throw "MCP3204: CS pin " + settings.cs + " is unavailable";
+		}
+	}
+
+	if(cpuinfo == "jetson_tx1"){
+		if(tx1Pin[settings.cs] == undefined){
+			throw "MCP3204: CS pin " + settings.cs + " is unavilable";
+		}	
+	}
+
+	cs = new Gpio(settings.cs, 'high');
 
 	this.settings = function(settings){
 
-		//TODO: add in change Vref
-		if(cpuinfo == "BCM2709"){
-			if(piPin[settings.cs] == undefined){
-				throw "MCP3204: CS pin " + settings.cs + "is unavailable";
-			}
-		}
-		
-		if(cpuinfo == "jetson_tx1"){
-			if(tx1Pin[settings.cs] == undefined){
-				throw "MCP3204: CS pin " + settings.cs + "is unavilable";
-			}	
-		}
-		
-		cs = new Gpio(settings.cs, 'high');
 		sampleMode = settings.sampleMode;
-	
+
 		if(sampleMode == "single"){
 			ch = settings.ch;
 
