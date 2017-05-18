@@ -1,6 +1,30 @@
 //TODO: check that these can work with multiple device at the same time or multiple instance being initialized
 
-rpio = require("rpio");
+var rpio = require("rpio");
+var fs = require("fs");
+
+//Check if the board is supported
+var cpuinfo = fs.readFileSync("/proc/cpuinfo", "utf8");
+if(cpuinfo.includes("Hardware") == false){
+	throw "Unable to Discover Board";
+}
+else{
+	var cpuPartNum = ["BCM2709"];
+	var modelName = ["Raspberry Pi 3"];
+	var cpu = cpuinfo.slice(cpuinfo.search("Hardware"));
+	cpu = cpu.substring(11, cpu.indexOf("\n"));
+	//Iterate through the list to find the model name
+	for(var i = 0; i < cpuPartNum.length; i++){
+		if(cpu === cpuPartNum[i]){
+			process.stdout.write("Your Board is: ");
+			console.log(modelName[i]);
+			break;
+		}
+	}
+	if(i >= cpuPartNum.length){
+		throw "Unsupported Board";
+	}
+}
 
 var driver = new Object(rpio.init({gpiomem: false}));
 
