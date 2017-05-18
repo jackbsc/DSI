@@ -4,7 +4,7 @@ driver.initSPI({bus: 0, device: 0, clk: 1000000}); // Since ADC uses SPI bus, in
 driver.initI2C({bus: 1});
 
 var temp = new driver.TC74({addr: 0x4C, bus: 1}); // Attach to i2c-1
-var adc = new driver.MCP3204({cs:  38, bus: 0, device: 0}); // Attach to spi0.0
+var adc = new driver.MCP3204({cs:  13, bus: 0, device: 0}); // Attach to spi0.0
 //var motor = new driver.L293({in1: 33, in2: 35, enable: 13});
 
 var humid = new Object();

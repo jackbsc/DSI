@@ -30,6 +30,12 @@ var spi = new Object(); // To be used as an 2D array of SPI objects, for multipl
 var i2c = new Object(); // To be used as an array of I2C objects, for multiple instance support
 var driver = new Object();
 
+/* Lookup table for pin mapping across different platform */
+// Map from physical pin number to Linux GPIO pin number, user is to give physical pin number
+/* TODO: give option to specify in GPIO numbering? */
+var piPin = {3:2, 5:3, 7:4, 11:17, 13:27, 15:22, 19:10, 21:9, 23:11, 29:5, 31:6, 33:13, 35:19, 27:26, 12:18, 16:23, 18:24, 22:25, 24:8, 26:7, 32:12, 36:16, 28:20, 40:21};
+var tx1Pin = {13:38, 29:219, 31:186, 33:63, 37:187, 16:37, 18:184, 32:36};
+
 /* Generic Data Bus Configuration */
 
 /* SPI*/
@@ -66,7 +72,7 @@ driver.initI2C = function(settings){
 /*Microchip MCP3204 ADC driver*/
 driver.MCP3204 = function(settings){
 
-	var cs = new Gpio(settings.cs, 'high');	
+	var cs;
 	var Vref = 3.3; // Default to 3.3V Vref
 	var sampleMode;
 	var d0, d1;
@@ -77,8 +83,21 @@ driver.MCP3204 = function(settings){
 	this.settings = function(settings){
 
 		//TODO: add in change Vref
-
+		if(cpuinfo == "BCM2709"){
+			if(piPin[settings.cs] == undefined){
+				throw "MCP3204: CS pin " + settings.cs + "is unavailable";
+			}
+		}
+		
+		if(cpuinfo == "jetson_tx1"){
+			if(tx1Pin[settings.cs] == undefined){
+				throw "MCP3204: CS pin " + settings.cs + "is unavilable";
+			}	
+		}
+		
+		cs = new Gpio(settings.cs, 'high');
 		sampleMode = settings.sampleMode;
+	
 		if(sampleMode == "single"){
 			ch = settings.ch;
 
