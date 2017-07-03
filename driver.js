@@ -36,8 +36,8 @@ var driver = new Object();
 // Devices will share common bus configuration, unless different bus is used
 driver.initSPI = function(settings){
 	/* TODO: Test multiple SPI instances */
-	spi[settings.bus, settings.device] = require("spi-device").openSync(settings.bus, settings.device, {mode: 0, noChipSelect: true});
-
+	spi[settings.bus, settings.device] = require("spi-device").openSync(settings.bus, settings.device, {mode: 0, maxSpeedHz: settings.clk});
+	/* No chip select option is not avaialbe in Jetson TX1? */
 }
 
 /* I2C */
