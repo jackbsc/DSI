@@ -4,7 +4,7 @@
 var cpuinfo = require("fs").readFileSync("/proc/cpuinfo", "utf8");
 
 if(cpuinfo.includes("Hardware") == false){
-	throw "Unable to Discover Board";
+	throw new Error("Unable To Discover Board");
 }
 else{
 	var cpuPartNum = ["BCM2709", "jetson_tx1"];
@@ -20,7 +20,7 @@ else{
 		}
 	}
 	if(i >= cpuPartNum.length){
-		throw "Unsupported Board";
+		throw new Error("Unsupported Board");
 	}
 
 }
@@ -43,7 +43,7 @@ var tx1Pin = {13:38, 29:219, 31:186, 33:63, 37:187, 16:37, 18:184, 32:36};
 driver.initSPI = function(settings){
 	/* TODO: Test multiple SPI instances */
 	spi[settings.bus, settings.device] = require("spi-device").openSync(settings.bus, settings.device, {mode: 0, maxSpeedHz: settings.clk});
-	/* No chip select option is not avaialbe in Jetson TX1? */
+	/* noChipSelect option is not avaialbe in Jetson TX1? */
 }
 
 /* I2C */
@@ -58,11 +58,11 @@ driver.initI2C = function(settings){
 		}
 	}
 	else if(isNaN(settings.bus)){
-		throw "Please Specify I2C Bus Number, Leave Empty To Use Platform Specific";
+		throw new Error("Please Specify I2C Bus Number, Leave Empty To Use Platform Specific");
 	}
 	else{
 		if(cpuinfo == "BCM2709" && (settings.bus <= 0 || settings.bus > 1)){
-			throw "The I2C Bus i2c-" + settings.bus + " does not exit";
+			throw new Error("The I2C Bus i2c-" + settings.bus + " does not exit");
 		}
 		// TODO: add in jetson check
 		i2c[settings.bus] = require("i2c-bus").openSync(settings.bus);
@@ -73,17 +73,39 @@ driver.initI2C = function(settings){
 driver.MCP3204 = function(settings){
 
 	var cs;
-	var Vref = 3.3; // Default to 3.3V Vref
 	var sampleMode;
 	var d0, d1;
 	var pos, neg;
+	var callFrom = "empty";
+	var userCB;
 
 	var bus = settings.bus, device = settings.device;
+	var Vref = settings.vref;
 
-	//TODO: add in change Vref
+	// This is to coordinate async transfer
+	var callBack = function(err, message){
+		// Pull the cs line high for the async transfer before calling user call-back
+		var result = ((message[1] & 0x0F) << 8) | message[2];
+
+		cs.writeSync(1);
+		if(callFrom == "readVolts"){
+			result = result * Vref / 4096;
+		}
+		console.log("here");
+		userCB(err, result);
+	}
+
+	if(isNaN(bus) || isNaN(device)){
+		throw new Error("MCP3204: Please specify the spidev to use");
+	}
+
+	if(isNaN(Vref)){
+		throw new Error("MCP3204: Please specify the reference voltage");
+	}
+
 	if(cpuinfo == "BCM2709"){
 		if(piPin[settings.cs] == undefined){
-			throw "MCP3204: CS pin " + settings.cs + " is unavailable";
+			throw new Error("MCP3204: CS pin " + settings.cs + " is unavailable");
 		}
 		else{
 			cs = new Gpio(piPin[settings.cs], 'high');
@@ -92,7 +114,7 @@ driver.MCP3204 = function(settings){
 
 	if(cpuinfo == "jetson_tx1"){
 		if(tx1Pin[settings.cs] == undefined){
-			throw "MCP3204: CS pin " + settings.cs + " is unavilable";
+			throw new Error("MCP3204: CS pin " + settings.cs + " is unavilable");
 		}
 		else{
 			cs = new Gpio(tx1Pin[settings.cs], 'high');
@@ -107,7 +129,7 @@ driver.MCP3204 = function(settings){
 			ch = settings.ch;
 
 			if(!(ch >=0 || ch <=3)){
-				throw "MCP3204: Error Channel Configuration (0-3)";
+				throw new Error("MCP3204: Error Channel Configuration (0-3)");
 			}
 			sampleMode = 1;
 			d0 = ch & 0x01;
@@ -118,18 +140,18 @@ driver.MCP3204 = function(settings){
 			neg = settings.neg;
 
 			if (pos - 1 < 0 && pos + 1 > 3){
-				throw "MCP3204: Channels Invalid";
+				throw new Error("MCP3204: Channels Invalid");
 			}
 			else if (pos % 2 == 0){
 				if(neg != (pos + 1)){
-					throw "MCP3204: Channels Invalid";
+					throw new Error("MCP3204: Channels Invalid");
 				}
 				d1 = (pos == 0) ? (0) : (1);
 				d0 = 0;
 			}
 			else if(pos % 2 != 0){
 				if(neg != (pos - 1)){
-					throw "MCP3204: Channels Invalid";
+					throw new Error("MCP3204: Channels Invalid");
 				}
 				d1 = (pos == 1) ? (0) : (1);
 				d0 = 1;	
@@ -137,33 +159,55 @@ driver.MCP3204 = function(settings){
 			sampleMode = 0;	
 		}
 		else{
-			throw "MCP3204: Unrecognized Channel Confguration";
+			throw new Error("MCP3204: Unrecognized Channel Confguration");
 		}	
 	}
 
-	this.readRaw = function(){
+	this.readRaw = function(cb){
+
+		if(callFrom != "readVolts"){
+			callFrom = "readRaw";
+		}
+		
 		var cmd = 0x04 | (sampleMode << 1);
-		var txbuf = new Buffer([cmd]);
+
+		var txbuf = new Buffer([0x04 | (sampleMode << 1),
+				(d1 << 7) | (d0 << 6),
+				0xFF]);
+
 		var rxbuf = new Buffer(txbuf.length);
+
+		var message = [{sendBuffer: txbuf,
+			receiveBuffer: rxbuf,
+			byteLength: txbuf.length}];
 
 		// Pull the cs pin low
 		cs.writeSync(0);
-		//send start command
-		spi[bus, device].transferSync([{sendBuffer: txbuf, receiveBuffer: rxbuf, byteLength: txbuf.length}]);
-		//send rest of the command
-		cmd = (d1 << 7) | (d0 << 6);
-		txbuf = new Buffer([cmd, 0xFF]);
-		rxbuf = new Buffer(txbuf.length);
-		spi[bus, device].transferSync([{sendBuffer: txbuf, receiveBuffer: rxbuf, byteLength: txbuf.length}]);	
-		// Pull the cs pin back to high
-		cs.writeSync(1);
-		// Return the read result
-		return ((rxbuf[0] & 0x0F) << 8) | rxbuf[1];
+		userCB = cb;
+		if(userCB == undefined){
+			callFrom = "empty";	
+			spi[bus, device].transferSync(message);
+			// Pull the cs pin back to high
+			cs.writeSync(1);
+			// Return the read result
+			return ((rxbuf[1] & 0x0F) << 8) | rxbuf[2];
+		}
+		else{
+			return spi[bus, device].transfer(message, callBack);
+		}
 	}
 
-	this.readVolts = function(){
-		return this.readRaw() * Vref / 4096;
-	}
+	this.readVolts = function(cb){
+
+		callFrom = "readVolts";
+
+		if(cb == undefined){
+			return this.readRaw(cb) * Vref / 4096;
+		}
+		else{
+			return this.readRaw(cb);
+		}
+	}	
 }
 
 /*Texas Instrument L293 motor controller driver*/
@@ -183,7 +227,7 @@ driver.L293 = function(config){
 	//DC motor driver, one IC can accomodate 2 DC motors
 	//set up PWM pins, leave out the undefined
 	if(isNaN(_in1) || isNaN(_in2)){
-		throw "L293: Invalid Driver Pin";
+		throw new Error("L293: Invalid Driver Pin");
 	}
 	else{
 		rpio.open(_in1, rpio.OUTPUT, rpio.LOW);
@@ -194,7 +238,7 @@ driver.L293 = function(config){
 	}
 
 	if(isNaN(_enable)){
-		throw "L293: Invalid Enable Pin";
+		throw new Error("L293: Invalid Enable Pin");
 	}
 	else{
 		rpio.open(_enable, rpio.OUTPUT, rpio.LOW);
@@ -203,7 +247,7 @@ driver.L293 = function(config){
 	//set up the pwm frequency
 	var divider = 19200 / _freq;
 	if(divider > 4096 || divider < 0){
-		throw "L293: Incorrect Frequency Setting";
+		throw new Error("L293: Incorrect Frequency Setting");
 	}
 
 	//find the nearest power of 2	
