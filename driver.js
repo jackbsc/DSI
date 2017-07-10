@@ -1,28 +1,41 @@
 //TODO: check that these can work with multiple device at the same time or multiple instance being initialized
+var sleep = require("sleep");
+var cpuinfo, boardName;
 
-//Check if the board is supported
-var cpuinfo = require("fs").readFileSync("/proc/cpuinfo", "utf8");
+function getBoardName(){
+	//Check if the board is supported
+	var cpuinfo = require("fs").readFileSync("/proc/cpuinfo", "utf8");
+	if(cpuinfo.includes("Hardware") == false){
+		throw new Error("Unable To Discover Board");
+	}
 
-if(cpuinfo.includes("Hardware") == false){
-	throw new Error("Unable To Discover Board");
-}
-else{
-	var cpuPartNum = ["BCM2709", "jetson_tx1"];
-	var modelName = ["Raspberry Pi 3", "Jetson TX1"];
 	cpuinfo = cpuinfo.slice(cpuinfo.search("Hardware"));
 	cpuinfo = cpuinfo.substring(11, cpuinfo.indexOf("\n"));
-	//Iterate through the list to find the model name
-	for(var i = 0; i < cpuPartNum.length; i++){
-		if(cpuinfo === cpuPartNum[i]){
-			process.stdout.write("Your Board is: ");
-			console.log(modelName[i]);
-			break;
-		}
-	}
-	if(i >= cpuPartNum.length){
-		throw new Error("Unsupported Board");
-	}
 
+	return cpuinfo;
+}
+
+function checkSupportedBoard(cpuinfo){
+	switch(cpuinfo){
+		case "BCM2709":
+		case "BCM2835":
+			return "Raspberry Pi";
+			break;
+		case "jetson_tx1":
+			return "Jetson TX1";
+			break;
+		default:
+			return null;
+	}
+}
+
+cpuinfo = getBoardName();
+boardName = checkSupportedBoard(cpuinfo);
+if(boardName == null){
+	throw new Error("Unsupported Board");
+}
+else{
+	console.log("Your board is " + boardName);
 }
 
 var Gpio = require("onoff").Gpio;
@@ -64,7 +77,9 @@ driver.initI2C = function(settings){
 		if(cpuinfo == "BCM2709" && (settings.bus <= 0 || settings.bus > 1)){
 			throw new Error("The I2C Bus i2c-" + settings.bus + " does not exit");
 		}
-		// TODO: add in jetson check
+		if(cpuinfo == "jetson_tx1" && (settings.bus < 0 || settings.bus > 6)){
+			throw new Error("The I2C Bus i2c-" + settings.bus + " deos not exit");
+		}
 		i2c[settings.bus] = require("i2c-bus").openSync(settings.bus);
 	}
 }
@@ -84,14 +99,14 @@ driver.MCP3204 = function(settings){
 
 	// This is to coordinate async transfer
 	var callBack = function(err, message){
-		// Pull the cs line high for the async transfer before calling user call-back
-		var result = ((message[1] & 0x0F) << 8) | message[2];
 
+		var result = ((message[0].receiveBuffer[1] & 0x0F) << 8) | message[0].receiveBuffer[2];
+
+		// Pull the cs line high for the async transfer before calling user call-back
 		cs.writeSync(1);
 		if(callFrom == "readVolts"){
 			result = result * Vref / 4096;
 		}
-		console.log("here");
 		userCB(err, result);
 	}
 
@@ -168,23 +183,27 @@ driver.MCP3204 = function(settings){
 		if(callFrom != "readVolts"){
 			callFrom = "readRaw";
 		}
-		
+
 		var cmd = 0x04 | (sampleMode << 1);
 
-		var txbuf = new Buffer([0x04 | (sampleMode << 1),
+		var txbuf = new Buffer([
+				0x04 | (sampleMode << 1),
 				(d1 << 7) | (d0 << 6),
-				0xFF]);
+				0xFF
+		]);
 
 		var rxbuf = new Buffer(txbuf.length);
 
-		var message = [{sendBuffer: txbuf,
+		var message = [{
+			sendBuffer: txbuf,
 			receiveBuffer: rxbuf,
-			byteLength: txbuf.length}];
+			byteLength: txbuf.length
+		}];
 
+		userCB = cb;
 		// Pull the cs pin low
 		cs.writeSync(0);
-		userCB = cb;
-		if(userCB == undefined){
+		if(typeof(cb) != "function"){
 			callFrom = "empty";	
 			spi[bus, device].transferSync(message);
 			// Pull the cs pin back to high
@@ -193,20 +212,14 @@ driver.MCP3204 = function(settings){
 			return ((rxbuf[1] & 0x0F) << 8) | rxbuf[2];
 		}
 		else{
-			return spi[bus, device].transfer(message, callBack);
+			spi[bus, device].transfer(message, callBack);
+			return 0;
 		}
 	}
 
 	this.readVolts = function(cb){
-
 		callFrom = "readVolts";
-
-		if(cb == undefined){
-			return this.readRaw(cb) * Vref / 4096;
-		}
-		else{
-			return this.readRaw(cb);
-		}
+		return this.readRaw(cb) * Vref / 4096;
 	}	
 }
 
@@ -308,22 +321,126 @@ driver.TC74 = function(settings){
 		// Generic settings of the temperature sensor?
 	}
 
-	this.getTemp = function(){
+	this.getTemp = function(cb){
 		while(!(i2c[bus].readByteSync(addr, configReg) & 0x40));
-		return i2c[bus].readByteSync(addr, tempReg);		
+		if(typeof(cb) == "function"){
+			return i2c[bus].readByte(addr, tempReg, cb);
+		}
+		else{
+			return i2c[bus].readByteSync(addr, tempReg);
+		}
 	}
 
 	this.standBy = function(){	
 		//TODO: check why standby mode cannot work
 		if(mode == "normal"){
 			mode = "standby";
-			rpio.i2cWrite(Buffer([configReg]));
-			rpio.i2cWrite(Buffer([0x80]));
+
 		}
 	}
 
 }
 
-//export the driver object to use by require()
+// Get pin mapping of differnt platform
+driver.getPinMap = function(pin){	
+	switch(cpuinfo){
+		case "BCM2709":
+		case "BCM2835":
+			return piPin[pin];
+			break;
+		case "jetson_tx1":
+			return tx1Pin[pin];
+			break;
+	}
+}
+
+// General purpose LED driver
+driver.LED = function(_pin, _activeLow){
+
+	var blinkHandle;
+	var softBlinkIntervalHandle;
+	var nextBlinkState = 1; // 0 = off, 1 = on
+	var softBlinkDir = "incr"; // Incr = increment, decr = decrement
+	var softBlinkVar;
+	var activeLow = _activeLow;
+	if(activeLow == undefined){
+		activeLow = false;
+	}
+
+	console.log(_pin, driver.getPinMap(_pin));
+	var pin = new Gpio(driver.getPinMap(_pin), 'out');
+
+	// Time is the on time
+	function softTimeoutHandler(blinkState, time){
+		pin.writeSync(activeLow ? (blinkState ^ 0x01) : blinkState);
+		// Check if the next blink state is on
+		// Assign the new on value if it is
+		setTimeout(softTimeoutHandler(blinkState ^ 0x01, blinkState ? (100 - time) : softBlinkVar), time / 10);
+		console.log("fwf");
+	}
+
+	function softIntervalHandler(maxVar, minVar){
+		// At each step, plus one percentage until it reaches max
+		if(softBlinkDir == "incr"){
+			softBlinkVar++
+				if(softBlinkVar == maxVar){
+					softBlinkDir = "decr";
+				}
+		}
+		else{
+			softBlinkVar--;
+			if(softBlinkVar == minVar){
+				softBlinkDir = "incr";
+			}
+		}
+	}
+
+	this.on = function(){
+		pin.writeSync(activeLow ? 0 : 1);
+	}
+
+	this.off = function(){
+		pin.writeSync(activeLow ? 1 : 0);
+	}
+
+	// Start to blink the LED
+	this.blink = function(interval){
+		blinkHandle = setInterval(function(){
+			// Toggle the LED every at every 'interval'
+			pin.writeSync(pin.readSync() ^ 0x01);
+		}, interval);
+	}
+
+	// Softblink LED, blink at a fixed frequency of 100Hz
+	// Interval is the time that goes from max to min and back and forth
+	// Max and min are specified in percentage
+	this.softBlink = function(interval, maxVar, minVar){
+		if(maxVar < minVar){
+			throw new Error("LED: max cannot less than min: " + maxVar + "<" + minVar);
+		}
+		// Set up the LED to blink at min first
+		pin.writeSync(activeLow ? 0 : 1);
+		nextBlinkState = 0; // Next state is off
+		// Next blink time will be 100 - minVar for off
+		softBlinkVar = minVar;
+		setTimeout(softTimeoutHandler(nextBlinkState, (100 - softBlinkVar), softBlinkVar / 10));
+		// Set up anoter timer to change the blinking time
+		softBlinkHandle = setInterval(softIntervalHandler(maxVar, minVar), (maxVar - minVar) / interval * 1000); // Specify in miliseconds
+	}
+
+	// Stop the LED from blinking and reset back to 0
+	this.stop = function(){
+		clearInterval(blinkHandle);
+		clearInterval(softBlinkHandle);
+		pin.writeSync(activeLow ? 1 : 0);
+	}
+}
+
+driver.uninit = function(){
+	// TODO: unexport GPIO
+	// TODO: uninit SPI, I2C, PWM
+}
+
+// Export the driver object to use by require()
 module.exports = driver;
 
