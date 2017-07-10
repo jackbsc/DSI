@@ -112,7 +112,7 @@ driver.MCP3204 = function(settings){
 		throw new Error("MCP3204: Please specify the reference voltage");
 	}
 
-	if(cpuinfo == "BCM2709"){
+	if(boardName == "Raspberry Pi"){
 		if(driver.getMappedPin(settings.cs) == null){
 			throw new Error("MCP3204: CS pin " + settings.cs + " is unavailable");
 		}
@@ -121,7 +121,7 @@ driver.MCP3204 = function(settings){
 		}
 	}
 
-	if(cpuinfo == "jetson_tx1"){
+	if(boardName == "Jetson TX1"){
 		if(driver.getMappedPin(settings.cs) == null){
 			throw new Error("MCP3204: CS pin " + settings.cs + " is unavilable");
 		}
@@ -228,7 +228,7 @@ driver.L293 = function(config){
 	var freq = config.freq;
 
 	var pwm0 = require("pwm").export(0, 0);
-	var pwm1 = require("pwm").export(0, 2);
+	var pwm1 = require("pwm").export(0, 1);
 
 	//TODO: add in generic motor driver, such as stepper
 	//TODO: solve the issue that PWM channels are all same value
@@ -239,9 +239,9 @@ driver.L293 = function(config){
 		throw new Error("L293: Invalid Driver Pin");
 	}
 	else{
-		
+
 	}
-	
+
 	if(isNaN(freq)){
 		throw new Error("L293: Invalid Operating Frequency");
 	}
@@ -249,6 +249,10 @@ driver.L293 = function(config){
 		// Convert to nanoseconds
 		pwm0.setPeriod(1 / freq * Math.pow(10, 9));
 		pwm1.setPeriod(1 / freq * Math.pow(10, 9));
+		pwm0.setDutyCycle(0);
+		pwm1.setDutyCycle(0);
+		pwm0.setEnable(1);
+		pwm1.setEnable(1);
 	}
 
 	if(!isNaN(enable) || enable == null){
@@ -261,11 +265,12 @@ driver.L293 = function(config){
 	}
 
 	this.setSpeed = function(motor, percentage, dir){
-		pwm0.setEnable(1);
-		pwm1.setEnable(1);
 		switch(motor){
 			case 1:
 				if(percentage >=0 && percentage <=100){
+					if(enable != null){
+						enable.writeSync(1);
+					}
 					switch(dir){
 						case "clockwise":
 							pwm0.setDutyCycle(percentage / 100 * (1 / freq * Math.pow(10, 9)));
@@ -279,8 +284,8 @@ driver.L293 = function(config){
 							if(enable != null){
 								enable.writeSync(0);
 							}
-							pwm0.setEnable(0);
-							pwm1.setEnable(0);
+							pwm0.setDutyCycle(0);
+							pwm1.setDutyCycle(0);
 							break;
 					}
 				}

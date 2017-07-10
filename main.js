@@ -3,7 +3,7 @@ var driver = require("./driver");
 driver.initSPI({bus: 0, device: 0, clk: 1000000}); // Since ADC uses SPI bus, initialize SPI
 driver.initI2C({bus: 1});
 
-var temp = new driver.TC74({addr: 0x4C, bus: 1}); // Attach to i2c-1
+//var temp = new driver.TC74({addr: 0x4C, bus: 1}); // Attach to i2c-1
 var adc = new driver.MCP3204({cs: 13, bus: 0, device: 0, vref: 3.3}); // Attach to spidev0.0
 var motor = new driver.L293({in1: 33, in2: 35, freq: 100, enable: null});
 
@@ -57,10 +57,10 @@ function sensorLoop(){
 		}
 	}
 
-	temp.getTemp(function(err, data){
-		if(err) throw new Error(err);
-		tem = data;
-	});
+//	temp.getTemp(function(err, data){
+//		if(err) throw new Error(err);
+//		tem = data;
+//	});
 
 }
 
