@@ -2,7 +2,7 @@ var sleep = require("sleep");
 var driver = require("./driver");
 driver.initSPI({bus: 0, device: 0, clk: 1000000}); // Since ADC uses SPI bus, initialize SPI
 driver.initI2C({bus: 1});
-
+driver.uninitI2C();
 var temp = new driver.TC74({addr: 0x4C, bus: 1}); // Attach to i2c-1
 var adc = new driver.MCP3204({cs: 13, bus: 0, device: 0, vref: 3.3}); // Attach to spi0.0
 //var motor = new driver.L293({in1: 33, in2: 35, enable: 13});
@@ -108,9 +108,11 @@ var msg = setInterval(msgLoop, 100);
 process.stdin.resume();
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", function(input){
-	if(input == "\u0018\n"){ // Gracefully exit
+	if(input == "\u0018\n"){ // Gracefully exit, ctrl+x
 		clearInterval(sensor);
 		clearInterval(msg);
+		led.stop();
+		driver.uninitAll();
 		process.stdin.pause();
 	}
 });

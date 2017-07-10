@@ -39,24 +39,27 @@ else{
 }
 
 var Gpio = require("onoff").Gpio;
-var spi = new Object(); // To be used as an 2D array of SPI objects, for multiple instance support
-var i2c = new Object(); // To be used as an array of I2C objects, for multiple instance support
+var spi = new Object(); // To be used as 2D array like SPI object, for multiple instance support
+var i2c = new Object(); // To be used as array like I2C object, for multiple instance support
 var driver = new Object();
 
-/* Lookup table for pin mapping across different platform */
+/* Lookup table for pin mapping across different platform, array like object */
 // Map from physical pin number to Linux GPIO pin number, user is to give physical pin number
 /* TODO: give option to specify in GPIO numbering? */
 var piPin = {3:2, 5:3, 7:4, 11:17, 13:27, 15:22, 19:10, 21:9, 23:11, 29:5, 31:6, 33:13, 35:19, 27:26, 12:18, 16:23, 18:24, 22:25, 24:8, 26:7, 32:12, 36:16, 28:20, 40:21};
-var tx1Pin = {13:38, 29:219, 31:186, 33:63, 37:187, 16:37, 18:184, 32:36};
+var tx1Pin = {7:216, 11:162, 13:38, 19:16, 21:17, 23:18, 29:219, 31:186, 33:63, 35:8, 37:187, 8:160, 10:161, 12:11, 16:37, 18:184, 24:19, 26:20, 32:36, 36:163, 38:9, 40:10};
 
 /* Generic Data Bus Configuration */
 
 /* SPI*/
 // Devices will share common bus configuration, unless different bus is used
 driver.initSPI = function(settings){
+	if(isNaN(settings.bus) || isNaN(settings.device)){
+		throw new Error("Please specify the correct spidev to use");
+	}
 	/* TODO: Test multiple SPI instances */
 	spi[settings.bus, settings.device] = require("spi-device").openSync(settings.bus, settings.device, {mode: 0, maxSpeedHz: settings.clk});
-	/* noChipSelect option is not avaialbe in Jetson TX1? */
+	/* FIXME:noChipSelect option is not avaialbe in Jetson TX1? */
 }
 
 /* I2C */
@@ -71,17 +74,10 @@ driver.initI2C = function(settings){
 		}
 	}
 	else if(isNaN(settings.bus)){
-		throw new Error("Please Specify I2C Bus Number, Leave Empty To Use Platform Specific");
+		throw new Error("Please Specify I2C Bus Number, Leave Empty To Use System Default");
 	}
-	else{
-		if(cpuinfo == "BCM2709" && (settings.bus <= 0 || settings.bus > 1)){
-			throw new Error("The I2C Bus i2c-" + settings.bus + " does not exit");
-		}
-		if(cpuinfo == "jetson_tx1" && (settings.bus < 0 || settings.bus > 6)){
-			throw new Error("The I2C Bus i2c-" + settings.bus + " deos not exit");
-		}
-		i2c[settings.bus] = require("i2c-bus").openSync(settings.bus);
-	}
+
+	i2c[settings.bus] = require("i2c-bus").openSync(settings.bus);
 }
 
 /*Microchip MCP3204 ADC driver*/
@@ -322,11 +318,11 @@ driver.TC74 = function(settings){
 	}
 
 	this.getTemp = function(cb){
-		while(!(i2c[bus].readByteSync(addr, configReg) & 0x40));
 		if(typeof(cb) == "function"){
 			return i2c[bus].readByte(addr, tempReg, cb);
 		}
 		else{
+			while(!(i2c[bus].readByteSync(addr, configReg) & 0x40));
 			return i2c[bus].readByteSync(addr, tempReg);
 		}
 	}
@@ -367,7 +363,6 @@ driver.LED = function(_pin, _activeLow){
 		activeLow = false;
 	}
 
-	console.log(_pin, driver.getPinMap(_pin));
 	var pin = new Gpio(driver.getPinMap(_pin), 'out');
 
 	// Time is the on time
@@ -431,14 +426,59 @@ driver.LED = function(_pin, _activeLow){
 	// Stop the LED from blinking and reset back to 0
 	this.stop = function(){
 		clearInterval(blinkHandle);
-		clearInterval(softBlinkHandle);
+		//clearInterval(softBlinkHandle);
 		pin.writeSync(activeLow ? 1 : 0);
 	}
 }
 
-driver.uninit = function(){
+/* Unexport every GPIO pins in the system */
+driver.unexportGPIO = function(){
+	var fs = require("fs");
+	var gpioDir = fs.readdirSync("/sys/class/gpio");
+
+	gpioDir.forEach(file =>{
+		if(file.startsWith("gpio") && !file.includes("chip")){
+			fs.writeFileSync("/sys/class/gpio/unexport", file.substr("gpio".length));
+		}
+	});
+}
+
+/* Close every I2C bus in the system */
+/* FIXME:The bus does not shutdown properly, maybe because of system need to use? */
+driver.uninitI2C = function(){
+	Object.keys(i2c).forEach(bus =>{
+		i2c[bus].closeSync();
+	});
+}
+
+/* Close every SPI bus in the system */
+driver.uninitSPI = function(){
+	Object.keys(spi).forEach(bus =>{
+		Object.keys(bus).forEach(device =>{
+			spi[bus, device].closeSync();
+		});
+	});
+}
+
+/* Unexport every PWM pins in the system */
+driver.unexportPWM = function(){
+	var fs = require("fs");
+	var pwmDir = fs.readdirSync("/sys/class/pwm/pwmchip0");
+
+	pwmDir.forEach(file =>{
+		if(file.startsWith("pwm")){
+			fs.writeFileSync("/sys/class/pwm/pwmchip0/unexport", file.substr("pwm".length));
+		}
+	});
+}
+
+driver.uninitAll = function(){
 	// TODO: unexport GPIO
 	// TODO: uninit SPI, I2C, PWM
+	driver.unexportGPIO();
+	driver.uninitI2C();
+	driver.uninitSPI();
+	driver.unexportPWM();
 }
 
 // Export the driver object to use by require()
