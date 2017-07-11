@@ -1,7 +1,7 @@
 //TODO: check that these can work with multiple device at the same time or multiple instance being initialized
 var sleep = require("sleep");
 
-function getBoardName(){
+function getCPUName(){
 	//Check if the board is supported
 	var cpuinfo = require("fs").readFileSync("/proc/cpuinfo", "utf8");
 	if(cpuinfo.includes("Hardware") == false){
@@ -14,7 +14,7 @@ function getBoardName(){
 	return cpuinfo;
 }
 
-function checkSupportedBoard(cpuinfo){
+function getBoardName(cpuinfo){
 	switch(cpuinfo){
 		case "BCM2709":
 		case "BCM2835":
@@ -29,8 +29,8 @@ function checkSupportedBoard(cpuinfo){
 }
 
 /* Things to do after running the driver */
-var cpuinfo = getBoardName(); // Global var to identify the cpu
-var boardName = checkSupportedBoard(cpuinfo); // Global var to identify the board
+var cpuinfo = getCPUName(); // Global var to identify the cpu
+var boardName = getBoardName(cpuinfo); // Global var to identify the board
 if(boardName == null){
 	throw new Error("Unsupported Board");
 }
@@ -45,7 +45,7 @@ else{
 var Gpio = require("onoff").Gpio;
 var spi = new Object(); // To be used as 2D array like SPI object, for multiple instance support
 var i2c = new Object(); // To be used as array like I2C object, for multiple instance support
-var driver = new Object();
+var driver = new Object(); // Place holder for all the driver objects
 
 /* Generic Data Bus Configuration */
 
@@ -64,18 +64,21 @@ driver.initSPI = function(settings){
 driver.initI2C = function(settings){
 	/* TODO: Test multiple I2C instances */
 	if(settings == undefined){
-		if(cpuinfo == "BCM2709"){
-			i2c[1] = require("i2c-bus").openSync(1);
-		}
-		else if(cpuinfo == "jetson_tx1"){
-			i2c[0] = require("i2c-bus").openSync(0);
+		switch(boardName){
+			case "Raspberry Pi":
+				i2c[1] = require("i2c-bus").openSync(1);
+				break;
+			case "Jetson TX1":
+				i2c[0] = require("i2c-bus").openSync(0);
+				break;
 		}
 	}
 	else if(isNaN(settings.bus)){
 		throw new Error("Please Specify I2C Bus Number, Leave Empty To Use System Default");
 	}
-
-	i2c[settings.bus] = require("i2c-bus").openSync(settings.bus);
+	else{
+		i2c[settings.bus] = require("i2c-bus").openSync(settings.bus);
+	}
 }
 
 /*Microchip MCP3204 ADC driver*/
@@ -112,22 +115,11 @@ driver.MCP3204 = function(settings){
 		throw new Error("MCP3204: Please specify the reference voltage");
 	}
 
-	if(boardName == "Raspberry Pi"){
-		if(driver.getMappedPin(settings.cs) == null){
-			throw new Error("MCP3204: CS pin " + settings.cs + " is unavailable");
-		}
-		else{
-			cs = new Gpio(driver.getMappedPin(settings.cs), 'high');
-		}
+	if(driver.getMappedPin(settings.cs) == null){
+		throw new Error("MCP3204: CS pin " + settings.cs + " is unavailable");
 	}
-
-	if(boardName == "Jetson TX1"){
-		if(driver.getMappedPin(settings.cs) == null){
-			throw new Error("MCP3204: CS pin " + settings.cs + " is unavilable");
-		}
-		else{
-			cs = new Gpio(driver.getMappedPin(settings.cs), 'high');
-		}
+	else{
+		cs = new Gpio(driver.getMappedPin(settings.cs), 'high');
 	}
 
 	this.settings = function(settings){
@@ -480,8 +472,6 @@ driver.unexportPWM = function(){
 }
 
 driver.uninitAll = function(){
-	// TODO: unexport GPIO
-	// TODO: uninit SPI, I2C, PWM
 	driver.unexportGPIO();
 	driver.uninitI2C();
 	driver.uninitSPI();
