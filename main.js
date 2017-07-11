@@ -1,5 +1,5 @@
 var sleep = require("sleep");
-var driver = require("./driver");
+var driver = require("driver");
 driver.initSPI({bus: 0, device: 0, clk: 1000000}); // Since ADC uses SPI bus, initialize SPI
 driver.initI2C({bus: 1});
 
