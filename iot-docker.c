@@ -14,26 +14,40 @@
 #define EXIT_NO_SRC      2
 #define EXIT_ERR_CHILD   3
 
-#if __aarch64__ || __arm__
-#define DOCKER_IMAGE "jackbsc/iot:io"
+#if defined(__aarch64__) || defined(__arm__)
+	#define DOCKER_IMAGE "jackbsc/iot:io"
 #endif
 
-#if __i386__ || __x86_64__
-#define DOCKER_IMAGE "jackbsc/iot:x86"
+#if defined(__i386__) || defined(__x86_64__)
+	#define DOCKER_IMAGE "jackbsc/iot:x86"
 #endif
 
 #define CONTAINER_NAME "iot"
 
 // These only use in manual exposing the devices
-#define EXPOSED_DEVICE "-v", "/sys/devices/:/sys/devices/",\
-                       "--device=/dev/spidev0.0",\
+#define EXPOSED_DEVICE "-v", "/sys/devices/:/sys/devices/", \
+                       "--device=/dev/spidev0.0", \
                        "--device=/dev/i2c-1"
 
-#define SYS_VOLUME "/sys/devices/:/sys/devices/"
+// These specify the commands to append after docker run
+#define SYS_VOLUME1 "/sys/class/:/sys/class/"
+#define SYS_VOLUME2 "/sys/devices/:/sys/devices/"
 #define DATA_VOLUME "/usr/local/share/id_sharevol/:/home/iot/src/"
+#define APPEND_CMD  "-v", SYS_VOLUME1, "-v", SYS_VOLUME2, "-v", DATA_VOLUME, \
+                    DOCKER_IMAGE, NULL
 
-#define OVERWRITE_CMD  NULL
+// These specify the command to overwrite the one in the Dockerfile
 /* 'fileName' is a variable defined in main */
+#define OVERWRITE_CMD "node", fileName, NULL
+
+// Helper macro to shift a 1D array elements left by 1, if you keep track of the size
+// it is equivalent to delete without reallocating memeory
+// array = the memory location starts to shift = array name
+// offset = offset from the above memory location = index
+// len = length of the legal memory location
+// size = size of the underlying data type
+#define SHIFT_ARRAY_LEFT_BY_ONE(array, offset, len, size) \
+	memmove(array + offset, array + offset + 1, (len - offset) * size)
 
 char* iotCmd[] = {
 	"--exchange",
@@ -60,78 +74,19 @@ void printCmd(char* argv[]){
 
 int getCmdSize(char* argv[]){
 	int count = 0;
+	
+	if(argv == NULL){
+		return 0;
+	}
+	
 	for(int i = 0; argv[i] != NULL; i++){
 		count++;
 	}
+
 	return count;
 }
 
-char** makeDynaMount(char* argv[], char* addedCmd[]){
-
-	// Construct part of the commands
-	int addedCmdSize = getCmdSize(argv) + getCmdSize(addedCmd);
-
-	char** argvList = (char**)malloc(addedCmdSize * sizeof(char*));
-
-	// Both copying are without the ending NULL pointer
-	for(int i = 0; i < getCmdSize(argv); i++){
-		argvList[i] = argv[i];
-	}
-	for(int i = 0; i < getCmdSize(addedCmd); i++){
-		argvList[getCmdSize(argv) + i] = addedCmd[i];
-	}
-
-	// Find the devices, namely i2c-x, spidevx.x
-	DIR* dirstream;
-
-	dirstream = opendir("/dev");
-	if(dirstream == NULL){
-		perror("Cannot open /dev directory");
-	}
-
-	struct dirent* dirp = readdir(dirstream);
-	int count = 0; // Use to record how many entries are found
-
-	while(dirp != NULL){
-		// Check if the directory contains files name in the format i2c-x and spidevx.x
-		char i2c[] = "i2c-";
-		char spi[] = "spidev";
-
-		// TODO: if use memcmp will cause segmentation fault if the names are shorter?
-		if(memcmp(dirp->d_name, i2c, sizeof(i2c) - 1) == 0 || memcmp(dirp->d_name, spi, sizeof(spi) - 1) == 0){
-			// Found the devices
-			count++;
-
-			argvList = realloc(argvList, (addedCmdSize + count) * sizeof(char*));
-
-			// Added the device to the last entry of the argvList
-			char device[] = "--device=/dev/";
-			char* deviceFlag = (char*)malloc((sizeof(device) + sizeof(spi) + 5) * sizeof(char*));
-			memcpy(deviceFlag, device, sizeof(device)); // Copy the null character also as it is needed next
-			argvList[addedCmdSize + count - 1] = strcat(deviceFlag, dirp->d_name);
-		}
-
-		dirp = readdir(dirstream);
-	}
-
-	closedir(dirstream);
-
-	// Append data volumes
-	// Append docker image name and NULL pointer
-	int expandedSize = count + addedCmdSize + 6;
-	argvList = realloc(argvList, sizeof(char*) * expandedSize);
-
-	argvList[expandedSize - 6] = "-v";
-	argvList[expandedSize - 5] = SYS_VOLUME;
-	argvList[expandedSize - 4] = "-v";
-	argvList[expandedSize - 3] = DATA_VOLUME;
-	argvList[expandedSize - 2] = DOCKER_IMAGE;
-	argvList[expandedSize - 1] = NULL;
-
-	return argvList;
-}
-
-void overwriteCmd(char* argvList[], ...){
+char** appendCmdByList(char* argvList[], ...){
 
 	int count  = 0;
 	int len = getCmdSize(argvList);
@@ -143,15 +98,76 @@ void overwriteCmd(char* argvList[], ...){
 	char* cmd = "Dummy"; // Dummy pointer location
 
 	while((cmd = va_arg(vl, char*)) != NULL){
-		argvList = realloc(argvList, sizeof(char*) * (len + count + 1));
-		argvList[len + count] = cmd;
 		count++;
+		argvList = (char**)realloc((argvList == NULL) ? NULL : argvList, sizeof(char*) * (len + count + 1));
+		argvList[len + count - 1] = cmd;
 	}
+	va_end(vl);
 
 	argvList[len + count] = NULL;
 
-	va_end(vl);
+	return argvList;
+}
 
+char** appendCmdByVar(char* argvList[], char* appendCmd[]){
+
+	int count = 0;
+	int arglen = getCmdSize(argvList);
+	int applen = getCmdSize(appendCmd);
+	
+	argvList = (char**)realloc((argvList == NULL) ? NULL : argvList, sizeof(char*) * (arglen + applen + 1));
+
+	while(appendCmd[count] != NULL){
+		argvList[arglen + count] = appendCmd[count];
+		count++;
+	}
+
+	argvList[arglen + count] = NULL;
+
+	return argvList;
+}
+
+char** makeDynaMount(char* argv[], char* addedCmd[]){
+
+	char** argvList = NULL;
+	char device[] = "--device=/dev/";
+
+	argvList = appendCmdByVar(argvList, argv);
+	argvList = appendCmdByVar(argvList, addedCmd);
+
+	// Find the devices, namely i2c-x, spidevx.x
+	DIR* dirstream;
+
+	dirstream = opendir("/dev");
+	if(dirstream == NULL){
+		perror("Cannot open /dev directory");
+	}
+
+	struct dirent* dirp = readdir(dirstream);
+
+	while(dirp != NULL){
+		// Check if the directory contains files name in the format i2c-x and spidevx.x
+		char i2c[] = "i2c-";
+		char spi[] = "spidev";
+
+		// TODO: if use memcmp will cause segmentation fault if the names are shorter?
+		if(memcmp(dirp->d_name, i2c, sizeof(i2c) - 1) == 0 || memcmp(dirp->d_name, spi, sizeof(spi) - 1) == 0){
+			// Found the device
+			char* deviceFlag = (char*)malloc((sizeof(device) + sizeof(spi) + 5) * sizeof(char*));
+			strcpy(deviceFlag, device);
+			
+			argvList = appendCmdByList(argvList, strcat(deviceFlag, dirp->d_name), NULL);
+		}
+
+		dirp = readdir(dirstream);
+	}
+
+	closedir(dirstream);
+
+	// Append data volumes and docker image name
+	argvList = appendCmdByList(argvList, APPEND_CMD);
+
+	return argvList;
 }
 
 int main(int argc, char* argv[]){
@@ -239,9 +255,7 @@ int main(int argc, char* argv[]){
 				free(filePath);
 
 				// Remove the name of the file from argv
-				for(int k = i + 1; argv[k] != NULL; k++){
-					argv[k] = argv[k + 1];
-				}
+				SHIFT_ARRAY_LEFT_BY_ONE(argv, i + 1, getCmdSize(argv) + 1, sizeof(char*));
 			}
 		}
 
@@ -249,20 +263,18 @@ int main(int argc, char* argv[]){
 		for(int j = 0; iotCmd[j] != NULL; j++){
 			if(strcmp(argv[i], iotCmd[j]) == 0){
 				// If found, process them and remove them from the list
-				for(int k = i; argv[k] != NULL; k++){
-					argv[k] = argv[k + 1];
-				}
+				SHIFT_ARRAY_LEFT_BY_ONE(argv, i, getCmdSize(argv) + 1, sizeof(char*));
 			}
 		}	
 	}
 
 	// Mount devices if run command is found
 	char** argvList = NULL;
-
+	
 	if(appendFlags == true){
 		argvList = makeDynaMount(argv, addedCmd);
 		// Overwrite command in the Dockerfile
-		overwriteCmd(argvList, OVERWRITE_CMD);
+		argvList = appendCmdByList(argvList, OVERWRITE_CMD);
 	}
 	else{
 		argvList = argv;
