@@ -1,6 +1,5 @@
 //TODO: check that these can work with multiple device at the same time or multiple instance being initialized
 var sleep = require("sleep");
-var cpuinfo, boardName;
 
 function getBoardName(){
 	//Check if the board is supported
@@ -29,8 +28,9 @@ function checkSupportedBoard(cpuinfo){
 	}
 }
 
-cpuinfo = getBoardName();
-boardName = checkSupportedBoard(cpuinfo);
+/* Things to do after running the driver */
+var cpuinfo = getBoardName(); // Global var to identify the cpu
+var boardName = checkSupportedBoard(cpuinfo); // Global var to identify the board
 if(boardName == null){
 	throw new Error("Unsupported Board");
 }
@@ -38,16 +38,14 @@ else{
 	console.log("Your board is " + boardName);
 }
 
+/* =================================================================================
+ *                               LINE OF SEPARATION
+ * =================================================================================*/
+
 var Gpio = require("onoff").Gpio;
 var spi = new Object(); // To be used as 2D array like SPI object, for multiple instance support
 var i2c = new Object(); // To be used as array like I2C object, for multiple instance support
 var driver = new Object();
-
-/* Lookup table for pin mapping across different platform, array like object */
-// Map from physical pin number to Linux GPIO pin number, user is to give physical pin number
-/* TODO: give option to specify in GPIO numbering? */
-var piPin = {3:2, 5:3, 7:4, 11:17, 13:27, 15:22, 19:10, 21:9, 23:11, 29:5, 31:6, 33:13, 35:19, 27:26, 12:18, 16:23, 18:24, 22:25, 24:8, 26:7, 32:12, 36:16, 28:20, 40:21};
-var tx1Pin = {7:216, 11:162, 13:38, 19:16, 21:17, 23:18, 29:219, 31:186, 33:63, 35:8, 37:187, 8:160, 10:161, 12:11, 16:37, 18:184, 24:19, 26:20, 32:36, 36:163, 38:9, 40:10};
 
 /* Generic Data Bus Configuration */
 
@@ -59,7 +57,7 @@ driver.initSPI = function(settings){
 	}
 	/* TODO: Test multiple SPI instances */
 	spi[settings.bus, settings.device] = require("spi-device").openSync(settings.bus, settings.device, {mode: 0, maxSpeedHz: settings.clk});
-	/* FIXME:noChipSelect option is not avaialbe in Jetson TX1? */
+	/* FIXME: noChipSelect option is not avaialbe in Jetson TX1? */
 }
 
 /* I2C */
@@ -115,20 +113,20 @@ driver.MCP3204 = function(settings){
 	}
 
 	if(cpuinfo == "BCM2709"){
-		if(piPin[settings.cs] == undefined){
+		if(driver.getMappedPin(settings.cs) == null){
 			throw new Error("MCP3204: CS pin " + settings.cs + " is unavailable");
 		}
 		else{
-			cs = new Gpio(piPin[settings.cs], 'high');
+			cs = new Gpio(driver.getMappedPin(settings.cs), 'high');
 		}
 	}
 
 	if(cpuinfo == "jetson_tx1"){
-		if(tx1Pin[settings.cs] == undefined){
+		if(driver.getMappedPin(settings.cs) == null){
 			throw new Error("MCP3204: CS pin " + settings.cs + " is unavilable");
 		}
 		else{
-			cs = new Gpio(tx1Pin[settings.cs], 'high');
+			cs = new Gpio(driver.getMappedPin(settings.cs), 'high');
 		}
 	}
 
@@ -222,76 +220,67 @@ driver.MCP3204 = function(settings){
 /*Texas Instrument L293 motor controller driver*/
 driver.L293 = function(config){
 
-	var _enable = config.enable;
-	var _in1 = config.in1;
-	var _in2 = config.in2;
-	var _in3 = config.in3;
-	var _in4 = config.in4;
-	var _freq = config.freq;
+	var enable = config.enable;
+	var in1 = config.in1;
+	var in2 = config.in2;
+	var in3 = config.in3;
+	var in4 = config.in4;
+	var freq = config.freq;
+
+	var pwm0 = require("pwm").export(0, 0);
+	var pwm1 = require("pwm").export(0, 2);
 
 	//TODO: add in generic motor driver, such as stepper
 	//TODO: solve the issue that PWM channels are all same value
-	//TODO: chang the frequency to specify in terms of Hz
+	//TODO: change the frequency to specify in terms of Hz
 
-	//DC motor driver, one IC can accomodate 2 DC motors
-	//set up PWM pins, leave out the undefined
-	if(isNaN(_in1) || isNaN(_in2)){
+	//DC motor driver, one IC can accomodate 2 DC motors, but onboard pwm can only support one
+	if(isNaN(in1) || isNaN(in2)){
 		throw new Error("L293: Invalid Driver Pin");
 	}
 	else{
-		rpio.open(_in1, rpio.OUTPUT, rpio.LOW);
-		rpio.open(_in2, rpio.OUTPUT, rpio.LOW);
+		
 	}
-	if(isNaN(_freq)){
-		_freq = 100;
-	}
-
-	if(isNaN(_enable)){
-		throw new Error("L293: Invalid Enable Pin");
+	
+	if(isNaN(freq)){
+		throw new Error("L293: Invalid Operating Frequency");
 	}
 	else{
-		rpio.open(_enable, rpio.OUTPUT, rpio.LOW);
+		// Convert to nanoseconds
+		pwm0.setPeriod(1 / freq * Math.pow(10, 9));
+		pwm1.setPeriod(1 / freq * Math.pow(10, 9));
 	}
 
-	//set up the pwm frequency
-	var divider = 19200 / _freq;
-	if(divider > 4096 || divider < 0){
-		throw new Error("L293: Incorrect Frequency Setting");
+	if(!isNaN(enable) || enable == null){
+		if(enable != null){
+			enable = new Gpio(driver.getMappedPin(enable), "low");
+		}
+	}
+	else{
+		throw new Error("L293: Invalid Enable Pin");
 	}
 
-	//find the nearest power of 2	
-	for(var i = 1; divider >>= 1; i <<= 1){
-
-	}
-	if(19200 / _freq - i > 19200 / _freq / 2){
-		i <<= 1;
-	}	
-
-	rpio.pwmSetClockDivider(i);
-
-	this.setSpeed = function(motor, percentage = 0, dir){
+	this.setSpeed = function(motor, percentage, dir){
+		pwm0.setEnable(1);
+		pwm1.setEnable(1);
 		switch(motor){
 			case 1:
 				if(percentage >=0 && percentage <=100){
 					switch(dir){
 						case "clockwise":
-							rpio.mode(_in1, rpio.PWM);
-							rpio.pwmSetRange(_in1, 1024);
-							rpio.pwmSetData(_in1, 1024 * percentage / 100);
-							rpio.mode(_in2, rpio.OUTPUT);
-							rpio.write(_in2, rpio.LOW);
-							rpio.write(_enable, rpio.HIGH);
+							pwm0.setDutyCycle(percentage / 100 * (1 / freq * Math.pow(10, 9)));
+							pwm1.setDutyCycle(0);
 							break;
 						case "anti_clockwise":
-							rpio.mode(_in1, rpio.OUTPUT);
-							rpio.write(_in1, rpio.LOW);
-							rpio.mode(_in2, rpio.PWM);
-							rpio.pwmSetRange(_in2, 1024);
-							rpio.pwmSetData(_in2, 1024 * percentage / 100);		
-							rpio.write(_enable, rpio.HIGH);
+							pwm0.setDutyCycle(0);
+							pwm1.setDutyCycle(percentage / 100 * (1 / freq * Math.pow(10, 9)));
 							break;
 						case "stop":
-							rpio.write(_enable, rpio.LOW);
+							if(enable != null){
+								enable.writeSync(0);
+							}
+							pwm0.setEnable(0);
+							pwm1.setEnable(0);
 							break;
 					}
 				}
@@ -305,40 +294,50 @@ driver.L293 = function(config){
 /*Microchip TC74 temerature sensor driver*/
 driver.TC74 = function(settings){
 	//TODO: check the clk speed limit of the i2c bus
-
-	var mode = "normal";
 	var tempReg = 0;
 	var configReg = 1;
 	var addr = settings.addr; // Need error checking here?
-	var bus = settings.bus; 
-
-	this.settings = function(settings){
-		// This function can use to do what?
-		// Generic settings of the temperature sensor?
-	}
+	var bus = settings.bus;
 
 	this.getTemp = function(cb){
 		if(typeof(cb) == "function"){
 			return i2c[bus].readByte(addr, tempReg, cb);
 		}
 		else{
-			while(!(i2c[bus].readByteSync(addr, configReg) & 0x40));
+			// Waiting for ready necessary?
+			//while(!(i2c[bus].readByteSync(addr, configReg) & 0x40));
 			return i2c[bus].readByteSync(addr, tempReg);
 		}
 	}
 
-	this.standBy = function(){	
-		//TODO: check why standby mode cannot work
-		if(mode == "normal"){
-			mode = "standby";
+	this.standBy = function(){
+		// Set 8th bit to 1	
+		return i2c[bus].writeByteSync(addr, configReg, 0x80);
+	}
 
-		}
+	this.wakeUp = function(){
+		// Set 8th bit to 0
+		return i2c[bus].writeByteSync(addr, configReg, 0x00);
 	}
 
 }
 
-// Get pin mapping of differnt platform
-driver.getPinMap = function(pin){	
+/* Get pin mapping of differnt platform */
+driver.getMappedPin = function(pin){
+	/* Lookup table for pin mapping across different platform, array like object */
+	// Map from physical pin number to Linux GPIO pin number, user is to give physical pin number
+	/* TODO: give option to specify in GPIO numbering? */
+	var piPin = {
+		3:2, 5:3, 7:4, 11:17, 13:27, 15:22, 19:10, 21:9, 23:11,
+		29:5, 31:6, 33:13, 35:19, 27:26, 12:18, 16:23, 18:24, 22:25, 24:8,
+		26:7, 32:12, 36:16, 28:20, 40:21
+	};
+	var tx1Pin = {
+		7:216, 11:162, 13:38, 19:16, 21:17, 23:18, 29:219,
+		31:186, 33:63, 35:8, 37:187, 8:160, 10:161, 12:11, 16:37, 18:184,
+		24:19, 26:20, 32:36, 36:163, 38:9, 40:10
+	};
+
 	switch(cpuinfo){
 		case "BCM2709":
 		case "BCM2835":
@@ -347,12 +346,15 @@ driver.getPinMap = function(pin){
 		case "jetson_tx1":
 			return tx1Pin[pin];
 			break;
+		default:
+			return null;
 	}
 }
 
-// General purpose LED driver
+/* General purpose LED driver */
 driver.LED = function(_pin, _activeLow){
 
+	// FIXME: softblink
 	var blinkHandle;
 	var softBlinkIntervalHandle;
 	var nextBlinkState = 1; // 0 = off, 1 = on
@@ -363,7 +365,7 @@ driver.LED = function(_pin, _activeLow){
 		activeLow = false;
 	}
 
-	var pin = new Gpio(driver.getPinMap(_pin), 'out');
+	var pin = new Gpio(driver.getMappedPin(_pin), 'out');
 
 	// Time is the on time
 	function softTimeoutHandler(blinkState, time){
