@@ -72,6 +72,11 @@ void printCmd(char* argv[]){
 	putchar('\n');
 }
 
+/**
+ * @brief     Count the number of entries in a 2D structure ended with NULL
+ * @param[in] The structure to read, must be a 2D structure ended with NULL
+ * @return    The number of entries
+ */
 int getCmdSize(char* argv[]){
 	int count = 0;
 	
@@ -86,6 +91,15 @@ int getCmdSize(char* argv[]){
 	return count;
 }
 
+/**
+ * @brief     Append commands to an existing/new 2D structure,
+ *            automatically allocate memory
+ * @param[in] A pointer to the 2D structure, can be NULL,
+ *            a new block of memory will be allocated if NULL
+ * @param[in] A va_list to the commands to be appended
+ * @return    A pointer to the block of memory holding the appended commands,
+ *            may or may not be the same location, always use this
+ */
 char** appendCmdByList(char* argvList[], ...){
 
 	int count  = 0;
@@ -109,6 +123,14 @@ char** appendCmdByList(char* argvList[], ...){
 	return argvList;
 }
 
+/**
+ * @brief     Does the same thing as @ref appendCmdByList,
+ *            except it uses a 2D structure
+ * @param[in] Same as @ref appendCmdByList
+ * @param[in] A 2D structure holding the commands to be appended,
+ *            must end with NULL
+ * @return    Same as @ref appendCmdByList
+ */
 char** appendCmdByVar(char* argvList[], char* appendCmd[]){
 
 	int count = 0;
@@ -127,13 +149,15 @@ char** appendCmdByVar(char* argvList[], char* appendCmd[]){
 	return argvList;
 }
 
-char** makeDynaMount(char* argv[], char* addedCmd[]){
+/**
+ * @brief     Looking through the directory /dev and
+ *            append any i2c and spi devices to the command list
+ * @param[in] Same as @ref appendCmdByList
+ * @return    Same as @ref appendCmdByList
+ */
+char** appendDevices(char* argvList[]){
 
-	char** argvList = NULL;
 	char device[] = "--device=/dev/";
-
-	argvList = appendCmdByVar(argvList, argv);
-	argvList = appendCmdByVar(argvList, addedCmd);
 
 	// Find the devices, namely i2c-x, spidevx.x
 	DIR* dirstream;
@@ -164,16 +188,80 @@ char** makeDynaMount(char* argv[], char* addedCmd[]){
 
 	closedir(dirstream);
 
-	// Append data volumes and docker image name
-	argvList = appendCmdByList(argvList, APPEND_CMD);
-
 	return argvList;
 }
+
+typedef union{
+	struct{
+		bool forceReplace : 1;
+		bool dummyField : 1;
+	};
+	char allField;
+}action_t;
 
 int main(int argc, char* argv[]){
 
 	bool appendFlags = false;
 	char* fileName = NULL;
+
+	action_t action = {.allField = 0};
+
+	// Check if user is running run command
+	//if(strcmp(argv[1], "run") == 0){
+		// Check if there is src file specify
+	//	if(argv[2] == NULL){
+			// No argument is specify, do nothing
+	//	}
+	//	else if(argv[2][0] == '-'){
+			// It is an argument
+	//		for(int i = 0; argv[2][i] != '\0'; i++){
+	//			switch(argv[2][i]){
+	//				case 'f':
+						// Force replace source file
+	//					action.forceReplace = true;
+						// Remove force flag from the argument list
+	//					SHIFT_ARRAY_LEFT_BY_ONE(argv[2], i, strlen(argv[2]), sizeof(char));
+	//					break;
+	//				default:
+						// Could be a docker command, do nothing
+	//					break;
+	//			}
+	//		}
+	//	}
+	//	else{
+			// Treat as a file name
+	//		fileName = argv[2];
+	//	}
+	//}
+
+	// TODO: do not run arguments multiple times
+
+	// Clean up stray arguments, to clean up any argument in the form "-\0"
+	//for(int i = 0; argv[i] != NULL; i++){
+	//	if(argv[i][0] == '-' && argv[i][1] == '\0'){
+	//		SHIFT_ARRAY_LEFT_BY_ONE(argv, i, getCmdSize(argv) + 1, sizeof(char*));
+	//	}
+	//}
+
+	//for(int i = 1; i != 0; i <<= 1){
+	//	if(action.allField & i){
+	//		switch(i){
+	//			case 1:
+					// Force replace source file
+	//				break;
+	//			case 2:
+	//				break;
+	//			case 4:
+	//				break;
+	//			case 8:
+	//				break;
+	//		}
+	//	}
+	//}
+
+	//printCmd(argv);
+
+	//while(1);
 
 	// Check if commands other than normal docker command are passed in
 	for(int i = 0; argv[i] != NULL; i++){
@@ -264,6 +352,7 @@ int main(int argc, char* argv[]){
 			if(strcmp(argv[i], iotCmd[j]) == 0){
 				// If found, process them and remove them from the list
 				SHIFT_ARRAY_LEFT_BY_ONE(argv, i, getCmdSize(argv) + 1, sizeof(char*));
+				// TODO: process here?
 			}
 		}	
 	}
@@ -272,7 +361,11 @@ int main(int argc, char* argv[]){
 	char** argvList = NULL;
 	
 	if(appendFlags == true){
-		argvList = makeDynaMount(argv, addedCmd);
+		argvList = appendCmdByVar(argvList, argv);
+		argvList = appendCmdByVar(argvList, addedCmd);
+		argvList = appendDevices(argvList);
+		// Append data volumes and docker image name
+		argvList = appendCmdByList(argvList, APPEND_CMD);
 		// Overwrite command in the Dockerfile
 		argvList = appendCmdByList(argvList, OVERWRITE_CMD);
 	}
