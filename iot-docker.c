@@ -6,7 +6,7 @@
 #include <dirent.h>
 #include <string.h>
 
-// TODO: dynamically determine the devices?
+// Device flags are determine dynamically at runtime
 #define DOCKER_IMAGE "jackbsc/iot:busybox"
 #define CONTAINER_NAME "iot"
 
