@@ -507,7 +507,7 @@ int main(int argc, char* argv[]){
 	printCmd(argvList);
 
 	// Create child process for running docker
-	pid_t pid = fork();
+	pid_t pid = vfork();
 
 	if(pid > 0){
 		// In parent process

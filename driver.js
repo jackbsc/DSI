@@ -218,9 +218,16 @@ driver.L293 = function(config){
 	var in3 = config.in3;
 	var in4 = config.in4;
 	var freq = config.freq;
+	var period;
+	var duty_cycle;
 
-	var pwm0 = require("pwm").export(0, 0);
-	var pwm1 = require("pwm").export(0, 1);
+	var fs = require("fs");
+	var pwmchip0 = "/sys/class/pwm/pwmchip0/";
+
+	// Export PWM0
+	fs.writeFileSync(pwmchip0 + "export", "0");
+	// Export PWM1
+	fs.writeFileSync(pwmchip0 + "export", "1");
 
 	//TODO: add in generic motor driver, such as stepper
 	//TODO: solve the issue that PWM channels are all same value
@@ -239,12 +246,13 @@ driver.L293 = function(config){
 	}
 	else{
 		// Convert to nanoseconds
-		pwm0.setPeriod(1 / freq * Math.pow(10, 9));
-		pwm1.setPeriod(1 / freq * Math.pow(10, 9));
-		pwm0.setDutyCycle(0);
-		pwm1.setDutyCycle(0);
-		pwm0.setEnable(1);
-		pwm1.setEnable(1);
+		period = 1 / freq * Math.pow(10, 9);
+		fs.writeFileSync(pwmchip0 + "/pwm0/period", period.toString());
+		fs.writeFileSync(pwmchip0 + "/pwm1/period", period.toString());
+		fs.writeFileSync(pwmchip0 + "/pwm0/duty_cycle", "0");
+		fs.writeFileSync(pwmchip0 + "/pwm1/duty_cycle", "0");
+		fs.writeFileSync(pwmchip0 + "/pwm0/enable", "1");
+		fs.writeFileSync(pwmchip0 + "/pwm1/enable", "1");
 	}
 
 	if(!isNaN(enable) || enable == null){
@@ -263,21 +271,22 @@ driver.L293 = function(config){
 					if(enable != null){
 						enable.writeSync(1);
 					}
+					duty_cycle = percentage / 100 * period;
 					switch(dir){
 						case "clockwise":
-							pwm0.setDutyCycle(percentage / 100 * (1 / freq * Math.pow(10, 9)));
-							pwm1.setDutyCycle(0);
+							fs.writeFileSync(pwmchip0 + "/pwm0/duty_cycle", duty_cycle.toString());
+							fs.writeFileSync(pwmchip0 + "/pwm1/duty_cycle", "0");
 							break;
-						case "anti_clockwise":
-							pwm0.setDutyCycle(0);
-							pwm1.setDutyCycle(percentage / 100 * (1 / freq * Math.pow(10, 9)));
+						case "anti_clockwise":		
+							fs.writeFileSync(pwmchip0 + "/pwm0/duty_cycle", "0");
+							fs.writeFileSync(pwmchip0 + "/pwm1/duty_cycle", duty_cycle.toString());	
 							break;
 						case "stop":
 							if(enable != null){
 								enable.writeSync(0);
-							}
-							pwm0.setDutyCycle(0);
-							pwm1.setDutyCycle(0);
+							}					
+							fs.writeFileSync(pwmchip0 + "/pwm0/duty_cycle", "0");
+							fs.writeFileSync(pwmchip0 + "/pwm1/duty_cycle", "0");
 							break;
 					}
 				}
