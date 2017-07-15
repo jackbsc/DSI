@@ -9,32 +9,69 @@
 #include <sys/wait.h>
 #include <dirent.h>
 #include <string.h>
+#include <ctype.h>
 
 #define EXIT_ERR_FORK    1
 #define EXIT_NO_SRC      2
 #define EXIT_ERR_CHILD   3
+#define EXIT_ERR_OP      4
+
+typedef enum{
+	SHORT_FORCE_REPLACE = 'f',
+	SHORT_VERSION = 'v',
+	DUMMY_COMMAND
+}shortcmd_t;
+
+// Ordering matters from here
+char* longCmd[] = {
+	// These are for searching
+	"help",
+	"version",
+	NULL
+};
+
+typedef enum{
+	LONG_HELP = 0,
+	LONG_VERSION
+}longcmd_t;
+
+// The ordering here matters for the action_t and the define, they must match each other
+typedef union{
+	struct{
+		bool forceReplace : 1; // -f
+		bool printVersion : 1; // -v or --version
+		bool printHelp    : 1; // --help
+		bool printRunHelp : 1; // --help in run
+	};
+	int allField;
+}action_t;
+
+#define FORCE_REPLACE  (1 << 0)
+#define PRINT_VERSION  (1 << 1)
+#define PRINT_HELP     (1 << 2)
+#define PRINT_RUN_HELP (1 << 3)
 
 #if defined(__aarch64__) || defined(__arm__)
-	#define DOCKER_IMAGE "jackbsc/iot:io"
+#define DOCKER_IMAGE "jackbsc/iot:io"
 #endif
 
 #if defined(__i386__) || defined(__x86_64__)
-	#define DOCKER_IMAGE "jackbsc/iot:x86"
+#define DOCKER_IMAGE "jackbsc/iot:x86"
 #endif
 
 #define CONTAINER_NAME "iot"
 
 // These only use in manual exposing the devices
 #define EXPOSED_DEVICE "-v", "/sys/devices/:/sys/devices/", \
-                       "--device=/dev/spidev0.0", \
-                       "--device=/dev/i2c-1"
+	"--device=/dev/spidev0.0", \
+	"--device=/dev/i2c-1"
 
 // These specify the commands to append after docker run
 #define SYS_VOLUME1 "/sys/class/:/sys/class/"
 #define SYS_VOLUME2 "/sys/devices/:/sys/devices/"
 #define DATA_VOLUME "/usr/local/share/id_sharevol/:/home/iot/src/"
 #define APPEND_CMD  "-v", SYS_VOLUME1, "-v", SYS_VOLUME2, "-v", DATA_VOLUME, \
-                    DOCKER_IMAGE, NULL
+	DOCKER_IMAGE, NULL
 
 // These specify the command to overwrite the one in the Dockerfile
 /* 'fileName' is a variable defined in main */
@@ -48,12 +85,6 @@
 // size = size of the underlying data type
 #define SHIFT_ARRAY_LEFT_BY_ONE(array, offset, len, size) \
 	memmove(array + offset, array + offset + 1, (len - offset) * size)
-
-char* iotCmd[] = {
-	"--exchange",
-	"--attach",
-	NULL
-};
 
 // TODO: should not use so many flags?
 char* addedCmd[] = {
@@ -79,11 +110,11 @@ void printCmd(char* argv[]){
  */
 int getCmdSize(char* argv[]){
 	int count = 0;
-	
+
 	if(argv == NULL){
 		return 0;
 	}
-	
+
 	for(int i = 0; argv[i] != NULL; i++){
 		count++;
 	}
@@ -104,11 +135,11 @@ char** appendCmdByList(char* argvList[], ...){
 
 	int count  = 0;
 	int len = getCmdSize(argvList);
-	
+
 	va_list vl;
 
 	va_start(vl, argvList);
-		
+
 	char* cmd = "Dummy"; // Dummy pointer location
 
 	while((cmd = va_arg(vl, char*)) != NULL){
@@ -136,7 +167,7 @@ char** appendCmdByVar(char* argvList[], char* appendCmd[]){
 	int count = 0;
 	int arglen = getCmdSize(argvList);
 	int applen = getCmdSize(appendCmd);
-	
+
 	argvList = (char**)realloc((argvList == NULL) ? NULL : argvList, sizeof(char*) * (arglen + applen + 1));
 
 	while(appendCmd[count] != NULL){
@@ -179,7 +210,7 @@ char** appendDevices(char* argvList[]){
 			// Found the device
 			char* deviceFlag = (char*)malloc((sizeof(device) + sizeof(spi) + 5) * sizeof(char*));
 			strcpy(deviceFlag, device);
-			
+
 			argvList = appendCmdByList(argvList, strcat(deviceFlag, dirp->d_name), NULL);
 		}
 
@@ -191,13 +222,121 @@ char** appendDevices(char* argvList[]){
 	return argvList;
 }
 
-typedef union{
-	struct{
-		bool forceReplace : 1;
-		bool dummyField : 1;
-	};
-	char allField;
-}action_t;
+void printHelpPage(void){
+	puts("Usage: iot-docker [option]...");
+	puts("Wrapper for Docker, enhance Docker for iot.");
+	puts("Automatically appends device flags and create data volume.");
+}
+
+void printRunHelpPage(void){
+	puts("This is run help page");
+}
+
+void printVersion(void){
+	puts("v0.0.1");
+}
+
+char* runCmdHandler(char* argv[], action_t* action){
+
+	char* fileName = NULL;
+
+	// Loop for every arguments
+	for(int i = 2; argv[i] != NULL; i++){
+		if(argv[i][0] == '-'){
+			// It is an argument
+			if(argv[i][1] != '-'){
+				// It is a short argument
+				for(int j = 0; argv[i][j] != '\0'; j++){
+					switch(argv[i][j]){
+						case 'f':
+							// Force replace source file
+							action->forceReplace = true;
+							// Remove force flag from the argument list
+							SHIFT_ARRAY_LEFT_BY_ONE(argv[i], j, strlen(argv[i]), sizeof(char));
+							break;
+						default:
+							// Could be a docker command, do nothing
+							break;
+					}
+				}
+			}
+			else{
+				// It is a long argument
+				// TODO: binary search through the first character in the long argument list?
+				int index = 0;
+				for(; longCmd[index] != NULL; index++){
+					if(strcmp(longCmd[index], argv[i] + 2) == 0){ // Search beyond --
+						break;
+					}
+				}
+				switch(index){
+					case LONG_HELP:
+						// The --help option will not be removed so it also apply to docker
+						action->printRunHelp = true;
+						break;
+					default:
+						// Could be a docker argument do nothing
+						break;
+				}
+			}
+		}
+		else if(isalpha(argv[i][0])){
+			// Treat as a file name and end the checking
+			// TODO: need to consider multiple file such as passing as *?
+			fileName = argv[i];
+			printf("it is a file\n");
+			break;
+		}
+		else{
+			errno = EINVAL;
+			perror("Unrecognize option");
+			exit(EXIT_ERR_OP);
+		}
+	}
+
+	return fileName;
+}
+
+void cmdHandler(char* argv[], action_t* action){
+	// Loop for every commands
+	for(int i = 1; argv[i] != NULL; i++){
+		if(argv[i][0] == '-'){
+			if(argv[i][1] != '-'){
+				// It is a short argument
+				switch(argv[i][1]){
+					case SHORT_VERSION:
+						action->printVersion = true;
+						break;
+					default:
+						// Could be a docker argument, do nothing
+						break;
+				}
+			}
+			else{
+				// It is a long argument
+				int index = 0;
+				for(; longCmd[index] != NULL; index++){
+					if(strcmp(longCmd[index], argv[i] + 2) == 0){
+						break;
+					}
+				}
+				switch(index){
+					case LONG_HELP:
+						action->printHelp = true;
+						break;
+					case PRINT_VERSION:
+						action->printVersion = true;
+					default:
+						// Could be docker argument, do nothing
+						break;
+				}
+			}
+		}
+		else{
+			// Could be a docker command, do nothing
+		}
+	}
+}
 
 int main(int argc, char* argv[]){
 
@@ -207,61 +346,123 @@ int main(int argc, char* argv[]){
 	action_t action = {.allField = 0};
 
 	// Check if user is running run command
-	//if(strcmp(argv[1], "run") == 0){
+	if(strcmp(argv[1], "run") == 0){
 		// Check if there is src file specify
-	//	if(argv[2] == NULL){
+		if(argv[2] == NULL){
 			// No argument is specify, do nothing
-	//	}
-	//	else if(argv[2][0] == '-'){
-			// It is an argument
-	//		for(int i = 0; argv[2][i] != '\0'; i++){
-	//			switch(argv[2][i]){
-	//				case 'f':
-						// Force replace source file
-	//					action.forceReplace = true;
-						// Remove force flag from the argument list
-	//					SHIFT_ARRAY_LEFT_BY_ONE(argv[2], i, strlen(argv[2]), sizeof(char));
-	//					break;
-	//				default:
-						// Could be a docker command, do nothing
-	//					break;
-	//			}
-	//		}
-	//	}
-	//	else{
-			// Treat as a file name
-	//		fileName = argv[2];
-	//	}
-	//}
-
-	// TODO: do not run arguments multiple times
+		}
+		else{
+			fileName = runCmdHandler(argv, &action);
+		}
+	}
+	// Can add another command you with to modify or add after this line, create another if-else case
+	else{
+		// If it is not a run command
+		cmdHandler(argv, &action);
+	}
 
 	// Clean up stray arguments, to clean up any argument in the form "-\0"
-	//for(int i = 0; argv[i] != NULL; i++){
-	//	if(argv[i][0] == '-' && argv[i][1] == '\0'){
-	//		SHIFT_ARRAY_LEFT_BY_ONE(argv, i, getCmdSize(argv) + 1, sizeof(char*));
-	//	}
-	//}
+	for(int i = 0; argv[i] != NULL; i++){
+		if(argv[i][0] == '-' && argv[i][1] == '\0'){
+			SHIFT_ARRAY_LEFT_BY_ONE(argv, i, getCmdSize(argv) + 1, sizeof(char*));
+		}
+	}
 
-	//for(int i = 1; i != 0; i <<= 1){
-	//	if(action.allField & i){
-	//		switch(i){
-	//			case 1:
-					// Force replace source file
-	//				break;
-	//			case 2:
-	//				break;
-	//			case 4:
-	//				break;
-	//			case 8:
-	//				break;
-	//		}
-	//	}
-	//}
+	// By separating the analysis and action, this avoid actions to be carry multiple times
+	for(int i = 1; i != 0; i <<= 1){
+		if(action.allField & i){
+			switch(i){
+				case FORCE_REPLACE:
+					{
+						// Force replace source file
+						// Check if there exist the src file
+						// fileName could be path, depends on how the user input
+						FILE* src = fopen(fileName, "rb");
+						if(src == NULL){
+							// TODO: add in option to use the file directly without copying?
+							perror("Unable to duplicate source file");
+							exit(EXIT_NO_SRC);
+						}
 
-	//printCmd(argv);
+						// Exist, copy the file into the share volumes
+						char* dir = (char*)malloc(strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":")) + 1);
 
-	//while(1);
+						memcpy(dir, DATA_VOLUME, strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":")));
+						dir[strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":"))] = '\0';
+
+						char* filePath = malloc(strlen(dir) + strlen(argv[i + 1]) + 1);
+
+						// Make sure the first index has the null character
+						filePath[0] = '\0';
+						// Construct the file path
+						strcat(strcat(filePath, dir), argv[i + 1]);
+
+						// Check if the path exist, if not, create
+						struct stat st;
+						if(stat(filePath, &st) == -1){
+							if(stat(dir, &st) == -1){
+								// Directory not exist, create
+								if(mkdir(dir, 0700) == -1){
+									// TODO: how to auto create parent directory?
+									perror("Error creating data volume");
+									fclose(src);
+									free(dir);
+									free(filePath);
+									exit(EXIT_NO_SRC);
+								}
+							}
+							else{
+								// Directory exist, just copy file
+							}
+
+							FILE* dest = fopen(filePath, "wb");
+							if(dest == NULL){
+								perror("Error accesing data volume");
+								fclose(src);
+								free(dir);
+								free(filePath);
+								exit(EXIT_NO_SRC);
+							}
+
+							// Copy the file byte by byte
+							char buf[1];
+							while(!feof(src)){
+								fread(buf, sizeof(char), sizeof(buf), src);
+								fwrite(buf, sizeof(char), sizeof(buf), dest);
+							}
+
+							fclose(dest);
+						}
+						else{
+							// Exist, does nothing, use the file directly
+						}
+
+						fclose(src);
+
+						free(dir);
+						free(filePath);
+
+						// Remove the name of the file from argv
+						SHIFT_ARRAY_LEFT_BY_ONE(argv, i + 1, getCmdSize(argv) + 1, sizeof(char*));
+					}
+					break;
+
+				case PRINT_HELP:
+					printHelpPage();
+					break;
+				case PRINT_RUN_HELP:
+					printRunHelpPage();
+					break;
+				case PRINT_VERSION:
+					printVersion();
+					break;
+			}
+		}
+	}
+
+	printCmd(argv);
+
+	while(1);
 
 	// Check if commands other than normal docker command are passed in
 	for(int i = 0; argv[i] != NULL; i++){
@@ -348,18 +549,18 @@ int main(int argc, char* argv[]){
 		}
 
 		// Check if custom command exist
-		for(int j = 0; iotCmd[j] != NULL; j++){
-			if(strcmp(argv[i], iotCmd[j]) == 0){
-				// If found, process them and remove them from the list
-				SHIFT_ARRAY_LEFT_BY_ONE(argv, i, getCmdSize(argv) + 1, sizeof(char*));
-				// TODO: process here?
-			}
-		}	
+		//for(int j = 0; iotCmd[j] != NULL; j++){
+		//	if(strcmp(argv[i], iotCmd[j]) == 0){
+		// If found, process them and remove them from the list
+		//		SHIFT_ARRAY_LEFT_BY_ONE(argv, i, getCmdSize(argv) + 1, sizeof(char*));
+		// TODO: process here?
+		//	}
+		//}	
 	}
 
 	// Mount devices if run command is found
 	char** argvList = NULL;
-	
+
 	if(appendFlags == true){
 		argvList = appendCmdByVar(argvList, argv);
 		argvList = appendCmdByVar(argvList, addedCmd);
@@ -372,7 +573,7 @@ int main(int argc, char* argv[]){
 	else{
 		argvList = argv;
 	}
-	
+
 	// Print argv for debugging
 	printCmd(argvList);
 
