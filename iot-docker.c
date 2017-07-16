@@ -11,6 +11,8 @@
 #include <string.h>
 #include <ctype.h>
 
+#define VERSION_STRING   "v0.0.1"
+
 #define EXIT_ERR_FORK    1
 #define EXIT_NO_SRC      2
 #define EXIT_ERR_CHILD   3
@@ -27,29 +29,35 @@ char* longCmd[] = {
 	// These are for searching
 	"help",
 	"version",
+	"list",
 	NULL
 };
 
 typedef enum{
 	LONG_HELP = 0,
-	LONG_VERSION
+	LONG_VERSION,
+	LONG_LIST,
 }longcmd_t;
 
 // The ordering here matters for the action_t and the define, they must match each other
 typedef union{
 	struct{
+		bool casualRun    : 1; // no flag
 		bool forceReplace : 1; // -f
 		bool printVersion : 1; // -v or --version
 		bool printHelp    : 1; // --help
 		bool printRunHelp : 1; // --help in run
+		bool listSrcFile  : 1; // list
 	};
 	int allField;
 }action_t;
 
-#define FORCE_REPLACE  (1 << 0)
-#define PRINT_VERSION  (1 << 1)
-#define PRINT_HELP     (1 << 2)
-#define PRINT_RUN_HELP (1 << 3)
+#define CASUAL_RUN     (1 << 0)
+#define FORCE_REPLACE  (1 << 1)
+#define PRINT_VERSION  (1 << 2)
+#define PRINT_HELP     (1 << 3)
+#define PRINT_RUN_HELP (1 << 4)
+#define LIST_SRC_FILE  (1 << 5)
 
 #if defined(__aarch64__) || defined(__arm__)
 #define DOCKER_IMAGE "jackbsc/iot:io"
@@ -74,10 +82,10 @@ typedef union{
 	DOCKER_IMAGE, NULL
 
 // These specify the command to overwrite the one in the Dockerfile
-/* 'fileName' is a variable defined in main */
-#define OVERWRITE_CMD "node", fileName, NULL
+/* mainFile is a variable defined in main */
+#define OVERWRITE_CMD "node", mainFile, NULL
 
-// Helper macro to shift a 1D array elements left by 1, if you keep track of the size
+// Helper macro to shift a 1D array's elements left by 1, if you keep track of the size
 // it is equivalent to delete without reallocating memeory
 // array = the memory location starts to shift = array name
 // offset = offset from the above memory location = index
@@ -233,12 +241,16 @@ void printRunHelpPage(void){
 }
 
 void printVersion(void){
-	puts("v0.0.1");
+	puts(VERSION_STRING);
 }
 
-char* runCmdHandler(char* argv[], action_t* action){
+void listSrcFile(void){
+		
+}
 
-	char* fileName = NULL;
+char** runCmdHandler(char* argv[], action_t* action){
+
+	char** fileNames = NULL;
 
 	// Loop for every arguments
 	for(int i = 2; argv[i] != NULL; i++){
@@ -281,20 +293,20 @@ char* runCmdHandler(char* argv[], action_t* action){
 			}
 		}
 		else if(isalpha(argv[i][0])){
-			// Treat as a file name and end the checking
+			// Treat as file names and end the checking
 			// TODO: need to consider multiple file such as passing as *?
-			fileName = argv[i];
-			printf("it is a file\n");
+			fileNames = argv + i;
+			action->casualRun = true;
 			break;
 		}
 		else{
 			errno = EINVAL;
-			perror("Unrecognize option");
+			printf("Unrecognize option: %s: %s\n", argv[i], strerror(errno));
 			exit(EXIT_ERR_OP);
 		}
 	}
 
-	return fileName;
+	return fileNames;
 }
 
 void cmdHandler(char* argv[], action_t* action){
@@ -324,8 +336,10 @@ void cmdHandler(char* argv[], action_t* action){
 					case LONG_HELP:
 						action->printHelp = true;
 						break;
-					case PRINT_VERSION:
+					case LONG_VERSION:
 						action->printVersion = true;
+					case LONG_LIST:
+						action->listSrcFile = true;
 					default:
 						// Could be docker argument, do nothing
 						break;
@@ -338,10 +352,110 @@ void cmdHandler(char* argv[], action_t* action){
 	}
 }
 
+void actionHandler(const action_t action, char** fileNames, char* argv[]){
+
+	for(int i = 1; i != 0; i <<= 1){
+		if(action.allField & i){
+			switch(i){
+				case CASUAL_RUN:
+				case FORCE_REPLACE:
+					{
+						// Force replace source files
+						// Check if there exist the src files
+						// fileName could be path, depends on how the user input
+						while(fileNames[0] != NULL){
+							FILE* src = fopen(fileNames[0], "rb");
+							if(src == NULL){
+								// TODO: add in option to use the file directly without copying?
+								printf("Unable to duplicate source file: %s: %s\n", fileNames[0], strerror(errno));
+								exit(EXIT_NO_SRC);
+							}
+
+							// Exist, get ready to copy the file into the share volumes
+							char* dir = (char*)malloc(strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":")) + 1);
+
+							memcpy(dir, DATA_VOLUME, strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":")));
+							dir[strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":"))] = '\0';
+
+							char* filePath = malloc(strlen(dir) + strlen(argv[i + 1]) + 1);
+
+							// Make sure the first index has the null character
+							filePath[0] = '\0';
+							// Construct the file path
+							strcat(strcat(filePath, dir), argv[i + 1]);
+
+							// Check if the path exist, if not, create
+							struct stat st;
+							// If force replace flag is set, overwrite any existing file
+							if(stat(filePath, &st) == -1 || action.forceReplace){
+								if(stat(dir, &st) == -1){
+									// Directory not exist, create
+									if(mkdir(dir, 0700) == -1){
+										// TODO: how to auto create parent directory?
+										printf("Error creating data volume: %s: %s\n", dir, strerror(errno));
+										fclose(src);
+										free(dir);
+										free(filePath);
+										exit(EXIT_NO_SRC);
+									}
+								}
+								else{
+									// Directory exist, just copy file
+								}
+
+								FILE* dest = fopen(filePath, "wb");
+								if(dest == NULL){
+									printf("Error accesing source file: %s: %s\n", filePath, strerror(errno));
+									fclose(src);
+									free(dir);
+									free(filePath);
+									exit(EXIT_NO_SRC);
+								}
+
+								// Copy the file byte by byte
+								char buf[1];
+								while(!feof(src)){
+									fread(buf, sizeof(char), sizeof(buf), src);
+									fwrite(buf, sizeof(char), sizeof(buf), dest);
+								}
+
+								fclose(dest);
+							}
+							else{
+								// File exist, just use the file
+							}
+
+							fclose(src);
+
+							free(dir);
+							free(filePath);
+
+							// Remove the name of the file from argv
+							SHIFT_ARRAY_LEFT_BY_ONE(fileNames, 0, getCmdSize(argv) + 1, sizeof(char*));
+						}
+					}
+					break;
+
+				case PRINT_HELP:
+					printHelpPage();
+					break;
+				case PRINT_RUN_HELP:
+					printRunHelpPage();
+					break;
+				case PRINT_VERSION:
+					printVersion();
+				case LIST_SRC_FILE:
+					listSrcFile();
+					break;
+			}
+		}
+	}
+}
+
 int main(int argc, char* argv[]){
 
-	bool appendFlags = false;
-	char* fileName = NULL;
+	char** fileNames = NULL;
+	char* mainFile = NULL;
 
 	action_t action = {.allField = 0};
 
@@ -352,7 +466,8 @@ int main(int argc, char* argv[]){
 			// No argument is specify, do nothing
 		}
 		else{
-			fileName = runCmdHandler(argv, &action);
+			fileNames = runCmdHandler(argv, &action);
+			mainFile = fileNames[0]; // Record the file name in case later deleted
 		}
 	}
 	// Can add another command you with to modify or add after this line, create another if-else case
@@ -369,199 +484,13 @@ int main(int argc, char* argv[]){
 	}
 
 	// By separating the analysis and action, this avoid actions to be carry multiple times
-	for(int i = 1; i != 0; i <<= 1){
-		if(action.allField & i){
-			switch(i){
-				case FORCE_REPLACE:
-					{
-						// Force replace source file
-						// Check if there exist the src file
-						// fileName could be path, depends on how the user input
-						FILE* src = fopen(fileName, "rb");
-						if(src == NULL){
-							// TODO: add in option to use the file directly without copying?
-							perror("Unable to duplicate source file");
-							exit(EXIT_NO_SRC);
-						}
-
-						// Exist, copy the file into the share volumes
-						char* dir = (char*)malloc(strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":")) + 1);
-
-						memcpy(dir, DATA_VOLUME, strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":")));
-						dir[strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":"))] = '\0';
-
-						char* filePath = malloc(strlen(dir) + strlen(argv[i + 1]) + 1);
-
-						// Make sure the first index has the null character
-						filePath[0] = '\0';
-						// Construct the file path
-						strcat(strcat(filePath, dir), argv[i + 1]);
-
-						// Check if the path exist, if not, create
-						struct stat st;
-						if(stat(filePath, &st) == -1){
-							if(stat(dir, &st) == -1){
-								// Directory not exist, create
-								if(mkdir(dir, 0700) == -1){
-									// TODO: how to auto create parent directory?
-									perror("Error creating data volume");
-									fclose(src);
-									free(dir);
-									free(filePath);
-									exit(EXIT_NO_SRC);
-								}
-							}
-							else{
-								// Directory exist, just copy file
-							}
-
-							FILE* dest = fopen(filePath, "wb");
-							if(dest == NULL){
-								perror("Error accesing data volume");
-								fclose(src);
-								free(dir);
-								free(filePath);
-								exit(EXIT_NO_SRC);
-							}
-
-							// Copy the file byte by byte
-							char buf[1];
-							while(!feof(src)){
-								fread(buf, sizeof(char), sizeof(buf), src);
-								fwrite(buf, sizeof(char), sizeof(buf), dest);
-							}
-
-							fclose(dest);
-						}
-						else{
-							// Exist, does nothing, use the file directly
-						}
-
-						fclose(src);
-
-						free(dir);
-						free(filePath);
-
-						// Remove the name of the file from argv
-						SHIFT_ARRAY_LEFT_BY_ONE(argv, i + 1, getCmdSize(argv) + 1, sizeof(char*));
-					}
-					break;
-
-				case PRINT_HELP:
-					printHelpPage();
-					break;
-				case PRINT_RUN_HELP:
-					printRunHelpPage();
-					break;
-				case PRINT_VERSION:
-					printVersion();
-					break;
-			}
-		}
-	}
-
+	actionHandler(action, fileNames, argv);
 	printCmd(argv);
-
-	while(1);
-
-	// Check if commands other than normal docker command are passed in
-	for(int i = 0; argv[i] != NULL; i++){
-		if(appendFlags == false && strcmp(argv[i], "run") == 0){
-			// If found run command, append the necessary device flags
-			appendFlags = true;
-			// Check if there is src file specify
-			if(argv[i + 1] == NULL){
-				// Exit with error if not found
-				errno = EBADF;
-				perror("Cannot find source file");
-				exit(EXIT_NO_SRC);
-			}
-			else{
-				fileName = argv[i + 1];
-				// Exist, copy the file into the share volumes
-				FILE* src = fopen(argv[i + 1], "rb");
-				if(src == NULL){
-					// TODO: add in option to use the file directly without copying?
-					perror("Unable to duplicate source file");
-					exit(EXIT_NO_SRC);
-				}
-
-				char* dir = (char*)malloc(strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":")) + 1);
-
-				memcpy(dir, DATA_VOLUME, strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":")));
-				dir[strlen(DATA_VOLUME) - strlen(strpbrk(DATA_VOLUME, ":"))] = '\0';
-
-				char* filePath = malloc(strlen(dir) + strlen(argv[i + 1]) + 1);
-
-				// Make sure the first index has the null character
-				filePath[0] = '\0';
-				// Construct the file name
-				strcat(strcat(filePath, dir), argv[i + 1]);
-
-				// Check if the file exist, if not, create
-				struct stat st;
-				if(stat(filePath, &st) == -1){
-
-					if(stat(dir, &st) == -1){
-						// Directory not exist, create
-						if(mkdir(dir, 0700) == -1){
-							perror("Unable to duplicate source file");
-							fclose(src);
-							free(dir);
-							free(filePath);
-							exit(EXIT_NO_SRC);
-						}
-					}
-					else{
-						// Directory exist, just copy file
-					}
-
-					FILE* dest = fopen(filePath, "wb");
-					if(dest == NULL){
-						perror("Unable to duplicate source file");
-						fclose(src);
-						free(dir);
-						free(filePath);
-						exit(EXIT_NO_SRC);
-					}
-
-					// Copy the file byte by byte
-					char buf[1];
-					while(!feof(src)){
-						fread(buf, sizeof(char), sizeof(buf), src);
-						fwrite(buf, sizeof(char), sizeof(buf), dest);
-					}
-
-					fclose(dest);
-				}
-				else{
-					// Exist, does nothing, use the file directly
-				}
-
-				fclose(src);
-
-				free(dir);
-				free(filePath);
-
-				// Remove the name of the file from argv
-				SHIFT_ARRAY_LEFT_BY_ONE(argv, i + 1, getCmdSize(argv) + 1, sizeof(char*));
-			}
-		}
-
-		// Check if custom command exist
-		//for(int j = 0; iotCmd[j] != NULL; j++){
-		//	if(strcmp(argv[i], iotCmd[j]) == 0){
-		// If found, process them and remove them from the list
-		//		SHIFT_ARRAY_LEFT_BY_ONE(argv, i, getCmdSize(argv) + 1, sizeof(char*));
-		// TODO: process here?
-		//	}
-		//}	
-	}
 
 	// Mount devices if run command is found
 	char** argvList = NULL;
 
-	if(appendFlags == true){
+	if(action.casualRun || action.forceReplace){
 		argvList = appendCmdByVar(argvList, argv);
 		argvList = appendCmdByVar(argvList, addedCmd);
 		argvList = appendDevices(argvList);
@@ -601,7 +530,7 @@ int main(int argc, char* argv[]){
 		exit(EXIT_ERR_FORK);
 	}
 
-	if(appendFlags == true){
+	if(action.casualRun || action.forceReplace){
 		// Section to free up the allocated memory
 		for(int i = getCmdSize(argv) + getCmdSize(addedCmd); strcmp(argvList[i], "-v") != 0; i++){
 			// It is in heap
