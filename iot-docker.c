@@ -11,7 +11,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define VERSION_STRING   "v0.0.1"
+#define VERSION_STRING   "v0.0.1\n"
 
 #define EXIT_ERR_FORK    1
 #define EXIT_NO_SRC      2
@@ -42,12 +42,12 @@ typedef enum{
 // The ordering here matters for the action_t and the define, they must match each other
 typedef union{
 	struct{
-		bool casualRun    : 1; // no flag
+		bool casualRun    : 1; // (no flag)
 		bool forceReplace : 1; // -f
 		bool printVersion : 1; // -v or --version
 		bool printHelp    : 1; // --help
-		bool printRunHelp : 1; // --help in run
-		bool listSrcFile  : 1; // list
+		bool printRunHelp : 1; // --help (in run)
+		bool listSrcFile  : 1; // --list
 	};
 	int allField;
 }action_t;
@@ -233,11 +233,11 @@ char** appendDevices(char* argvList[]){
 void printHelpPage(void){
 	puts("Usage: iot-docker [option]...");
 	puts("Wrapper for Docker, enhance Docker for iot.");
-	puts("Automatically appends device flags and create data volume.");
+	puts("Automatically appends device flags and create data volume.\n");
 }
 
 void printRunHelpPage(void){
-	puts("This is run help page");
+	puts("This is run help page\n");
 }
 
 void printVersion(void){
@@ -245,7 +245,13 @@ void printVersion(void){
 }
 
 void listSrcFile(void){
-		
+	char cmd[64] = "ls ";
+	char vol[64] = DATA_VOLUME;
+
+	*(strpbrk(vol, ":")) = '\0';
+	strcat(cmd, vol);
+	system(cmd);
+	puts("");	
 }
 
 char** runCmdHandler(char* argv[], action_t* action){
@@ -338,8 +344,10 @@ void cmdHandler(char* argv[], action_t* action){
 						break;
 					case LONG_VERSION:
 						action->printVersion = true;
+						break;
 					case LONG_LIST:
 						action->listSrcFile = true;
+						break;
 					default:
 						// Could be docker argument, do nothing
 						break;
@@ -438,14 +446,18 @@ void actionHandler(const action_t action, char** fileNames, char* argv[]){
 
 				case PRINT_HELP:
 					printHelpPage();
+					exit(EXIT_SUCCESS);
 					break;
 				case PRINT_RUN_HELP:
 					printRunHelpPage();
+					exit(EXIT_SUCCESS);
 					break;
 				case PRINT_VERSION:
 					printVersion();
+					exit(EXIT_SUCCESS);
 				case LIST_SRC_FILE:
 					listSrcFile();
+					exit(EXIT_SUCCESS);
 					break;
 			}
 		}
@@ -485,7 +497,6 @@ int main(int argc, char* argv[]){
 
 	// By separating the analysis and action, this avoid actions to be carry multiple times
 	actionHandler(action, fileNames, argv);
-	printCmd(argv);
 
 	// Mount devices if run command is found
 	char** argvList = NULL;
