@@ -40,7 +40,7 @@
 
 	{
 		"BoardName": "Intel Joule",
-		"CPU": ["Intel(R) Atom(TM) Processor T5700"],
+		"CPU": ["Intel(R) Atom(TM) Processor T5700 "],
 		"PinMapping": [
 			{
 

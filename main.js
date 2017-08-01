@@ -1,11 +1,12 @@
 var sleep = require("sleep");
-var driver = require("driver");
-driver.initSPI({bus: 0, device: 0, clk: 1000000}); // Since ADC uses SPI bus, initialize SPI
+var driver = require("iot-driver");
+driver.initSPI(); // Since ADC uses SPI bus, initialize SPI
+//{bus: 0, device: 0, clk: 1000000})
 driver.initI2C({bus: 1});
 
-//var temp = new driver.TC74({addr: 0x4C, bus: 1}); // Attach to i2c-1
+var temp = new driver.TC74({addr: 0x4C, bus: 1}); // Attach to i2c-1
 var adc = new driver.MCP3204({cs: 13, bus: 0, device: 0, vref: 3.3}); // Attach to spidev0.0
-//var motor = new driver.L293({in1: 33, in2: 35, freq: 100, enable: null});
+var motor = new driver.L293({in1: 33, in2: 35, freq: 100, enable: null});
 
 var led = new driver.LED(16);
 led.blink(100);
@@ -57,10 +58,10 @@ function sensorLoop(){
 		}
 	}
 
-//	temp.getTemp(function(err, data){
-//		if(err) throw new Error(err);
-//		tem = data;
-//	});
+	temp.getTemp(function(err, data){
+		if(err) throw new Error(err);
+		tem = data;
+	});
 
 }
 
@@ -70,16 +71,16 @@ function msgLoop(){
 	if(humid.reading < 70){
 		motorStatus = "COOLING";
 		if(tem > 25){
-//			motor.setSpeed(1, 70, "clockwise");
+			motor.setSpeed(1, 70, "clockwise");
 			motorSpeed = "HIGH";
 		}
 		else{
-//			motor.setSpeed(1, 20, "clockwise");
+			motor.setSpeed(1, 20, "clockwise");
 			motorSpeed = "LOW";
 		}
 	}
 	else{
-//		motor.setSpeed(1, 50, "anti_clockwise");
+		motor.setSpeed(1, 50, "anti_clockwise");
 		motorStatus = "DRYING";
 	}
 

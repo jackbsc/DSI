@@ -1,41 +1,49 @@
 //TODO: check that these can work with multiple device at the same time or multiple instance being initialized
 var sleep = require("sleep");
 
-function getCPUName(){
+function getBoard(){
 	//Check if the board is supported
 	var cpuinfo = require("fs").readFileSync("/proc/cpuinfo", "utf8");
+
 	if(cpuinfo.includes("Hardware") == false){
-		throw new Error("Unable To Discover Board");
+		// If fail to get in Hardware field, get using model name field
+		if(cpuinfo.includes("model name") == false){
+			throw new Error("Unable To Discover Board");
+		}
+		cpuinfo = cpuinfo.slice(cpuinfo.search("model name"));
+		cpuinfo = cpuinfo.substring(13, cpuinfo.indexOf("@"));
+	}
+	else{
+		cpuinfo = cpuinfo.slice(cpuinfo.search("Hardware"));
+		cpuinfo = cpuinfo.substring(11, cpuinfo.indexOf("\n"));
 	}
 
-	cpuinfo = cpuinfo.slice(cpuinfo.search("Hardware"));
-	cpuinfo = cpuinfo.substring(11, cpuinfo.indexOf("\n"));
+	var modelJSON = require("fs").readFileSync("/home/iot/node_modules/iot-driver/board.json", "utf8");
+	var modelObj = JSON.parse(modelJSON);
+	var name = null;
+	var index = null;
 
-	return cpuinfo;
-}
+	modelObj.forEach(function(object, idx){
+		object.CPU.forEach(function(cpuName){
+			if(cpuinfo == cpuName){
+				name = object.BoardName;
+				index = idx;
+			}
+		});
+	});
 
-function getBoardName(cpuinfo){
-	switch(cpuinfo){
-		case "BCM2709":
-		case "BCM2835":
-			return "Raspberry Pi";
-			break;
-		case "jetson_tx1":
-			return "Jetson TX1";
-			break;
-		default:
-			return null;
-	}
+	return {cpuinfo, name, index};
+	// Index is the index in model.json file
 }
 
 /* Things to do after running the driver */
-var cpuinfo = getCPUName(); // Global var to identify the cpu
-var boardName = getBoardName(cpuinfo); // Global var to identify the board
-if(boardName == null){
+var board = getBoard();
+
+if(board.name == null){
 	throw new Error("Unsupported Board");
 }
 else{
-	console.log("Your board is " + boardName);
+	console.log("Your board is " + board.name);
 }
 
 /* =================================================================================
@@ -52,9 +60,20 @@ var driver = new Object(); // Place holder for all the driver objects
 /* SPI*/
 // Devices will share common bus configuration, unless different bus is used
 driver.initSPI = function(settings){
-	if(isNaN(settings.bus) || isNaN(settings.device)){
-		throw new Error("Please specify the correct spidev to use");
+	if(settings == undefined){
+		settings = new Object();
+		// Read the first SPI entry in model.json
+		var modelJSON = require("fs").readFileSync("/home/iot/node_modules/iot-driver/board.json", "utf8");
+		var modelObj = JSON.parse(modelJSON);
+		var spiDev = modelObj[board.index].SPIDevices[0];
+		
+		settings.bus = parseInt(spiDev[spiDev.indexOf(".") - 1]);
+		settings.device = parseInt(spiDev[spiDev.indexOf(".") + 1]);
+		settings.clk = 1000000; // SPI clock default to 1MHz
 	}
+	else if(isNaN(settings.bus) || isNaN(settings.device)){
+		throw new Error("Please specify the correct spidev to use");
+	}	
 	/* TODO: Test multiple SPI instances */
 	spi[settings.bus, settings.device] = require("spi-device").openSync(settings.bus, settings.device, {mode: 0, maxSpeedHz: settings.clk});
 	/* FIXME: noChipSelect option is not avaialbe in Jetson TX1? */
@@ -64,21 +83,19 @@ driver.initSPI = function(settings){
 driver.initI2C = function(settings){
 	/* TODO: Test multiple I2C instances */
 	if(settings == undefined){
-		switch(boardName){
-			case "Raspberry Pi":
-				i2c[1] = require("i2c-bus").openSync(1);
-				break;
-			case "Jetson TX1":
-				i2c[0] = require("i2c-bus").openSync(0);
-				break;
-		}
+		settings = new Object();
+		// Read the first I2C entry in model.json
+		var modelJSON = require("fs").readFileSync("/home/iot/node_modules/iot-driver/board.json", "utf8");
+		var modelObj = JSON.parse(modelJSON);
+		var i2cDev = modelObj[board.index].I2CDevices[0];
+		
+		settings.bus = parseInt(i2cDev[i2cDev.indexOf("-") + 1]);
 	}
 	else if(isNaN(settings.bus)){
 		throw new Error("Please Specify I2C Bus Number, Leave Empty To Use System Default");
 	}
-	else{
-		i2c[settings.bus] = require("i2c-bus").openSync(settings.bus);
-	}
+
+	i2c[settings.bus] = require("i2c-bus").openSync(settings.bus);
 }
 
 /*Microchip MCP3204 ADC driver*/
@@ -344,7 +361,7 @@ driver.getMappedPin = function(pin){
 		24:19, 26:20, 32:36, 36:163, 38:9, 40:10
 	};
 
-	switch(cpuinfo){
+	switch(board.cpuinfo){
 		case "BCM2709":
 		case "BCM2835":
 			return piPin[pin];
