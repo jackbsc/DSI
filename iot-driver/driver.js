@@ -1,5 +1,4 @@
 //TODO: check that these can work with multiple device at the same time or multiple instance being initialized
-var sleep = require("sleep");
 
 function getBoard(){
 	//Check if the board is supported
@@ -63,9 +62,7 @@ driver.initSPI = function(settings){
 	if(settings == undefined){
 		settings = new Object();
 		// Read the first SPI entry in model.json
-		var modelJSON = require("fs").readFileSync("/home/iot/node_modules/iot-driver/board.json", "utf8");
-		var modelObj = JSON.parse(modelJSON);
-		var spiDev = modelObj[board.index].SPIDevices[0];
+		var spiDev = JSON.parse(require("fs").readFileSync("/home/iot/node_modules/iot-driver/board.json", "utf8"))[board.index].SPIDevices[0];
 		
 		settings.bus = parseInt(spiDev[spiDev.indexOf(".") - 1]);
 		settings.device = parseInt(spiDev[spiDev.indexOf(".") + 1]);
@@ -85,9 +82,7 @@ driver.initI2C = function(settings){
 	if(settings == undefined){
 		settings = new Object();
 		// Read the first I2C entry in model.json
-		var modelJSON = require("fs").readFileSync("/home/iot/node_modules/iot-driver/board.json", "utf8");
-		var modelObj = JSON.parse(modelJSON);
-		var i2cDev = modelObj[board.index].I2CDevices[0];
+		var i2cDev = JSON.parse(require("fs").readFileSync("/home/iot/node_modules/iot-driver/board.json", "utf8"))[board.index].I2CDevices[0];
 		
 		settings.bus = parseInt(i2cDev[i2cDev.indexOf("-") + 1]);
 	}
@@ -105,8 +100,8 @@ driver.MCP3204 = function(settings){
 	var sampleMode;
 	var d0, d1;
 	var pos, neg;
-	var callFrom = "empty";
-	var userCB;
+	var callFrom = "empty"; // This used to tell which mode of conversion the user is using in call back
+	var userCB; // This will points to the user call back fuction
 
 	var bus = settings.bus, device = settings.device;
 	var Vref = settings.vref;
@@ -247,8 +242,6 @@ driver.L293 = function(config){
 	fs.writeFileSync(pwmchip0 + "export", "1");
 
 	//TODO: add in generic motor driver, such as stepper
-	//TODO: solve the issue that PWM channels are all same value
-	//TODO: change the frequency to specify in terms of Hz
 
 	//DC motor driver, one IC can accomodate 2 DC motors, but onboard pwm can only support one
 	if(isNaN(in1) || isNaN(in2)){
@@ -346,38 +339,23 @@ driver.TC74 = function(settings){
 }
 
 /* Get pin mapping of differnt platform */
+var pinMap = JSON.parse(require("fs").readFileSync("/home/iot/node_modules/iot-driver/board.json", "utf8"))[board.index].PinMapping;
 driver.getMappedPin = function(pin){
-	/* Lookup table for pin mapping across different platform, array like object */
+	var mappedPin = null;
 	// Map from physical pin number to Linux GPIO pin number, user is to give physical pin number
 	/* TODO: give option to specify in GPIO numbering? */
-	var piPin = {
-		3:2, 5:3, 7:4, 11:17, 13:27, 15:22, 19:10, 21:9, 23:11,
-		29:5, 31:6, 33:13, 35:19, 27:26, 12:18, 16:23, 18:24, 22:25, 24:8,
-		26:7, 32:12, 36:16, 28:20, 40:21
-	};
-	var tx1Pin = {
-		7:216, 11:162, 13:38, 19:16, 21:17, 23:18, 29:219,
-		31:186, 33:63, 35:8, 37:187, 8:160, 10:161, 12:11, 16:37, 18:184,
-		24:19, 26:20, 32:36, 36:163, 38:9, 40:10
-	};
+	pinMap.forEach(function(map){
+		if(map[pin] != null){
+			mappedPin = map[pin];
+		}
+	});
 
-	switch(board.cpuinfo){
-		case "BCM2709":
-		case "BCM2835":
-			return piPin[pin];
-			break;
-		case "jetson_tx1":
-			return tx1Pin[pin];
-			break;
-		default:
-			return null;
-	}
+	return mappedPin;
 }
 
 /* General purpose LED driver */
 driver.LED = function(_pin, _activeLow){
 
-	// FIXME: softblink
 	var blinkHandle;
 	var softBlinkIntervalHandle;
 	var nextBlinkState = 1; // 0 = off, 1 = on
@@ -434,6 +412,7 @@ driver.LED = function(_pin, _activeLow){
 	// Softblink LED, blink at a fixed frequency of 100Hz
 	// Interval is the time that goes from max to min and back and forth
 	// Max and min are specified in percentage
+	// FIXME: softblink will recursively call the handler function and call stack will overflow
 	this.softBlink = function(interval, maxVar, minVar){
 		if(maxVar < minVar){
 			throw new Error("LED: max cannot less than min: " + maxVar + "<" + minVar);
